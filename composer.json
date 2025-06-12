@@ -1,0 +1,35 @@
+{
+    "name": "widia/shipping",
+    "description": "Shipping package",
+    "type": "library",
+    "require": {
+        "php": "^7.3|^8.0",
+        "guzzlehttp/guzzle": "^6.5.8",
+        "illuminate/support": "^6.0|^7.0|^8.0|^9.0|^10.0",
+        "nesbot/carbon": "^2.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^8.0|^9.0",
+        "orchestra/testbench": "^5.0|^6.0|^7.0|^8.0"
+    },
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Widia\\Shipping\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Widia\\Shipping\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Widia\\Shipping\\ShippingServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+} 
