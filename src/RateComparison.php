@@ -28,17 +28,33 @@ class RateComparison
             return;
         }
 
+        $this->carriers = [];
         // 初始化指定的承运商
-        foreach ($carriers as $carrier) {
-            switch (strtolower($carrier)) {
+        foreach ($carriers as $carrierKey => $carrierConfig) {
+            $carrierName = strtolower($carrierKey);
+            switch ($carrierName) {
                 case 'fedex':
-                    $this->carriers['fedex'] = new FedEx();
+                    $carrier = new FedEx();
+                    if (isset($carrierConfig['name'])) {
+                        $carrier->setAccount($carrierConfig['name']);
+                    }
+                    if (isset($carrierConfig['account_number'])) {
+                        $carrier->setCarrierAccount($carrierConfig['account_number']);
+                    }
+                    $this->carriers[] = $carrier;
                     break;
                 case 'ups':
-                    $this->carriers['ups'] = new UPS();
+                    $carrier = new UPS();
+                    if (isset($carrierConfig['name'])) {
+                        $carrier->setAccount($carrierConfig['name']);
+                    }
+                    if (isset($carrierConfig['account_number'])) {
+                        $carrier->setCarrierAccount($carrierConfig['account_number']);
+                    }
+                    $this->carriers[] = $carrier;
                     break;
                 default:
-                    throw new Exception("Unsupported carrier: {$carrier}");
+                    throw new Exception("Unsupported carrier: {$carrierKey}");
             }
         }
     }
@@ -54,19 +70,14 @@ class RateComparison
         $this->cheapestRates = [];
 
         // 获取每个承运商的费率
-        foreach ($this->carriers as $name => $carrier) {
+        foreach ($this->carriers as $carrier) {
             try {
-                // 设置账户
-                if (isset($data['account_number'])) {
-                    $carrier->setAccount($data['account_number']);
-                }
-
                 // 获取费率
                 $rates = $carrier->getRates($data);
-                $this->processCarrierRates($name, $rates);
+                $this->processCarrierRates($carrier->getName(), $rates);
             } catch (Exception $e) {
                 // 记录错误但继续处理其他承运商
-                $this->rates[$name] = [
+                $this->rates[$carrier->getName()] = [
                     'error' => $e->getMessage()
                 ];
             }

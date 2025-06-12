@@ -21,10 +21,27 @@ class UPS extends AbstractCarrier
         'WORLDWIDE_EXPEDITED',
         'STANDARD',
     ];
+    protected string $accountName;
+    protected string $carrierAccount;
 
     public function __construct()
     {
         $this->client = new Client();
+    }
+
+    public function setAccount(string $accountName): void
+    {
+        $this->accountName = $accountName;
+    }
+
+    public function setCarrierAccount(string $accountNumber): void
+    {
+        $this->carrierAccount = $accountNumber;
+    }
+
+    public function getName(): string
+    {
+        return $this->accountName ?? 'ups';
     }
 
     public function setAccount(string $accountNumber): self

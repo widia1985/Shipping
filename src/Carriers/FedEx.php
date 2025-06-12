@@ -22,10 +22,27 @@ class FedEx extends AbstractCarrier
         'INTERNATIONAL_FIRST',
         'INTERNATIONAL_GROUND',
     ];
+    protected string $accountName;
+    protected string $carrierAccount;
 
     public function __construct()
     {
         $this->client = new Client();
+    }
+
+    public function setAccount(string $accountName): void
+    {
+        $this->accountName = $accountName;
+    }
+
+    public function setCarrierAccount(string $accountNumber): void
+    {
+        $this->carrierAccount = $accountNumber;
+    }
+
+    public function getName(): string
+    {
+        return $this->accountName ?? 'fedex';
     }
 
     public function setAccount(string $accountNumber): self
