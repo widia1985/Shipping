@@ -32,7 +32,7 @@ class FedEx extends AbstractCarrier
     {
         $this->token = Token::where('accountname', $accountNumber)
             ->whereHas('application', function ($query) {
-                $query->where('carrier', 'fedex');
+                $query->where('type', 'fedex');
             })
             ->first();
 
@@ -45,7 +45,7 @@ class FedEx extends AbstractCarrier
             throw new \Exception("FedEx application not found for account: {$accountNumber}");
         }
 
-        $this->url = $application->sandbox ? $this->test_url : $this->live_url;
+        $this->url = str_contains(strtolower($application->application_name), 'sandbox') ? $this->test_url : $this->live_url;
         $this->client = new Client([
             'base_uri' => $this->url,
             'headers' => $this->getHeaders(),
@@ -306,59 +306,70 @@ class FedEx extends AbstractCarrier
 
     private function prepareLabelData(array $data): array
     {
-        $formattedAddress = $this->addressFormatter->format($data, $data['service_type']);
+        // 获取默认发件人信息
+        $defaultShipper = config('shipping.default_shipper');
         
-        // 获取格式化后的地址
-        $shipperAddress = $this->formatAddress($formattedAddress['shipper']);
-        $recipientAddress = $this->formatAddress($formattedAddress['recipient']);
+        // 合并默认发件人信息和传入的数据
+        $data['shipper'] = array_merge($defaultShipper, $data['shipper'] ?? []);
 
-        // 确定最终的服务类型
-        $serviceType = $this->mapServiceType($formattedAddress['service_type']);
+        $formattedAddress = $this->addressFormatter->format($data, $data['service_type']);
 
         // 处理包裹数据
-        $packageLineItems = [];
+        $packages = [];
         if (isset($data['packages']) && is_array($data['packages'])) {
             // 多个包裹的情况
             foreach ($data['packages'] as $index => $package) {
-                $packageLineItems[] = [
-                    'sequenceNumber' => $index + 1,
-                    'weight' => [
-                        'units' => 'LB',
-                        'value' => $package['weight']
+                $packages[] = [
+                    'PackagingType' => [
+                        'Code' => '02'
                     ],
-                    'dimensions' => [
-                        'length' => $package['length'],
-                        'width' => $package['width'],
-                        'height' => $package['height'],
-                        'units' => 'IN'
+                    'Dimensions' => [
+                        'UnitOfMeasurement' => [
+                            'Code' => 'IN'
+                        ],
+                        'Length' => $package['length'],
+                        'Width' => $package['width'],
+                        'Height' => $package['height']
+                    ],
+                    'PackageWeight' => [
+                        'UnitOfMeasurement' => [
+                            'Code' => 'LBS'
+                        ],
+                        'Weight' => $package['weight']
                     ]
                 ];
             }
         } else {
             // 单个包裹的情况
-            $packageLineItems[] = [
-                'sequenceNumber' => 1,
-                'weight' => [
-                    'units' => 'LB',
-                    'value' => $data['weight']
+            $packages[] = [
+                'PackagingType' => [
+                    'Code' => '02'
                 ],
-                'dimensions' => [
-                    'length' => $data['length'],
-                    'width' => $data['width'],
-                    'height' => $data['height'],
-                    'units' => 'IN'
+                'Dimensions' => [
+                    'UnitOfMeasurement' => [
+                        'Code' => 'IN'
+                    ],
+                    'Length' => $data['length'],
+                    'Width' => $data['width'],
+                    'Height' => $data['height']
+                ],
+                'PackageWeight' => [
+                    'UnitOfMeasurement' => [
+                        'Code' => 'LBS'
+                    ],
+                    'Weight' => $data['weight']
                 ]
             ];
         }
 
         $requestedShipment = [
-            'shipper' => $shipperAddress,
-            'recipients' => [$recipientAddress],
+            'shipper' => $this->formatAddress($formattedAddress['shipper']),
+            'recipients' => [$this->formatAddress($formattedAddress['recipient'])],
             'pickupType' => 'DROPOFF_AT_FEDEX_LOCATION',
-            'serviceType' => $serviceType,
+            'serviceType' => $this->mapServiceType($formattedAddress['service_type']),
             'packagingType' => 'YOUR_PACKAGING',
-            'totalPackageCount' => count($packageLineItems),
-            'requestedPackageLineItems' => $packageLineItems,
+            'totalPackageCount' => count($packages),
+            'requestedPackageLineItems' => $packages,
             'labelSpecification' => [
                 'imageType' => 'PDF',
                 'labelStockType' => 'PAPER_4X6'

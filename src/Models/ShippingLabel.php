@@ -7,6 +7,8 @@ use Carbon\Carbon;
 
 class ShippingLabel extends Model
 {
+    protected $table;
+
     protected $fillable = [
         'carrier',
         'account_number',
@@ -35,23 +37,29 @@ class ShippingLabel extends Model
         'cancelled_at' => 'datetime'
     ];
 
+    public function __construct(array $attributes = [])
+    {
+        parent::__construct($attributes);
+        $this->table = config('shipping.database.tables.shipping_labels');
+    }
+
     public function scopeActive($query)
     {
-        return $query->whereNull('cancelled_at');
+        return $query->where('status', 'ACTIVE');
     }
 
     public function scopeCancelled($query)
     {
-        return $query->whereNotNull('cancelled_at');
+        return $query->where('status', 'CANCELLED');
     }
 
     public function cancel($reason = null, $cancelledBy = null)
     {
         $this->update([
-            'cancelled_at' => Carbon::now(),
-            'cancellation_reason' => $reason,
+            'status' => 'CANCELLED',
+            'cancelled_at' => now(),
             'cancelled_by' => $cancelledBy,
-            'status' => 'CANCELLED'
+            'cancellation_reason' => $reason,
         ]);
     }
 

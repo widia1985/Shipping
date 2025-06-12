@@ -31,7 +31,7 @@ class UPS extends AbstractCarrier
     {
         $this->token = Token::where('accountname', $accountNumber)
             ->whereHas('application', function ($query) {
-                $query->where('carrier', 'ups');
+                $query->where('type', 'ups');
             })
             ->first();
 
@@ -44,7 +44,7 @@ class UPS extends AbstractCarrier
             throw new \Exception("UPS application not found for account: {$accountNumber}");
         }
 
-        $this->url = $application->sandbox ? $this->test_url : $this->live_url;
+        $this->url = str_contains(strtolower($application->application_name), 'sandbox') ? $this->test_url : $this->live_url;
         $this->client = new Client([
             'base_uri' => $this->url,
             'headers' => $this->getHeaders(),
@@ -154,6 +154,12 @@ class UPS extends AbstractCarrier
 
     private function prepareLabelData(array $data): array
     {
+        // 获取默认发件人信息
+        $defaultShipper = config('shipping.default_shipper');
+        
+        // 合并默认发件人信息和传入的数据
+        $data['shipper'] = array_merge($defaultShipper, $data['shipper'] ?? []);
+
         $formattedAddress = $this->addressFormatter->format($data, $data['service_type']);
 
         // 处理包裹数据
@@ -409,6 +415,10 @@ class UPS extends AbstractCarrier
 
     private function prepareRateData(array $data): array
     {
+        if (!$this->token) {
+            throw new \Exception('UPS account not set');
+        }
+
         $formattedAddress = $this->addressFormatter->format($data, $data['service_type']);
 
         // 处理包裹数据
@@ -515,11 +525,23 @@ class UPS extends AbstractCarrier
             }
         }
 
-        return [
+        $rateRequest = [
             'RateRequest' => [
                 'Shipment' => $shipment
             ]
         ];
+
+        // 添加账户信息
+        $rateRequest['RateRequest']['Shipment']['Shipper']['ShipperNumber'] = $this->token->accountname;
+
+        // 如果配置了使用协商费率，添加相关设置
+        if (config('shipping.carriers.ups.use_negotiated_rates', true)) {
+            $rateRequest['RateRequest']['Shipment']['ShipmentRatingOptions'] = [
+                'NegotiatedRatesIndicator' => 'Y'
+            ];
+        }
+
+        return $rateRequest;
     }
 
     private function formatAddress(array $address): array
