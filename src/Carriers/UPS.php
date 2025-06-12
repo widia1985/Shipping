@@ -152,6 +152,110 @@ class UPS extends AbstractCarrier
         return json_decode($response->getBody()->getContents(), true);
     }
 
+    /**
+     * 创建退货标签
+     */
+    public function createReturnLabel(array $data): array
+    {
+        if (!$this->token) {
+            throw new \Exception('UPS account not set');
+        }
+
+        $response = $this->client->post('/api/shipments/v1/returns', [
+            'json' => $this->prepareReturnLabelData($data)
+        ]);
+
+        $result = json_decode($response->getBody()->getContents(), true);
+
+        // 保存标签信息
+        $this->saveLabelInfo($data, $result);
+
+        return $result;
+    }
+
+    /**
+     * 准备退货标签数据
+     */
+    private function prepareReturnLabelData(array $data): array
+    {
+        $formattedAddress = $this->addressFormatter->format($data, $data['service_type']);
+
+        // 如果没有提供退货地址，使用默认退货地址
+        if (empty($formattedAddress['return_address'])) {
+            $formattedAddress['return_address'] = config('shipping.default_return_address');
+        }
+
+        $requestedShipment = [
+            'shipper' => $this->formatAddress($formattedAddress['shipper']), // 客户地址
+            'shipTo' => $this->formatAddress($formattedAddress['return_address']), // 退货地址
+            'description' => $data['return_reason'] ?? 'Return Shipment',
+            'paymentInformation' => [
+                'shipmentCharge' => [
+                    'type' => '01', // 01 = 预付
+                    'billShipper' => [
+                        'accountNumber' => $this->token->accountname
+                    ]
+                ]
+            ],
+            'service' => [
+                'code' => $this->mapServiceType($formattedAddress['service_type']),
+                'description' => $this->normalizeServiceType($formattedAddress['service_type'])
+            ],
+            'package' => [
+                'packagingType' => [
+                    'code' => '02', // 02 = 客户包装
+                    'description' => 'Customer Packaging'
+                ],
+                'dimensions' => [
+                    'unitOfMeasurement' => [
+                        'code' => 'IN',
+                        'description' => 'Inches'
+                    ],
+                    'length' => $data['package']['length'],
+                    'width' => $data['package']['width'],
+                    'height' => $data['package']['height']
+                ],
+                'packageWeight' => [
+                    'unitOfMeasurement' => [
+                        'code' => 'LBS',
+                        'description' => 'Pounds'
+                    ],
+                    'weight' => $data['package']['weight']
+                ]
+            ],
+            'returnService' => [
+                'code' => '9', // 9 = 退货服务
+                'description' => 'Return Service'
+            ],
+            'referenceNumber' => [
+                'value' => $data['rma_number'] ?? $data['return_authorization_number'] ?? '',
+                'barCodeIndicator' => '1'
+            ],
+            'originalTrackingNumber' => $data['original_tracking_number']
+        ];
+
+        // 添加签名要求
+        if (!empty($data['signature_required'])) {
+            $requestedShipment['package']['signatureRequired'] = [
+                'code' => $this->mapSignatureType($data['signature_type'] ?? 'DIRECT'),
+                'description' => 'Signature Required'
+            ];
+        }
+
+        // 添加发货通知
+        if (!empty($data['ship_notify']) && !empty($data['ship_notify_email'])) {
+            $requestedShipment['shipmentNotification'] = [
+                'emailAddress' => $data['ship_notify_email'],
+                'notificationType' => 'SHIPMENT',
+                'message' => $data['ship_notify_message'] ?? 'Your return shipment has been processed.'
+            ];
+        }
+
+        return [
+            'requestedShipment' => $requestedShipment
+        ];
+    }
+
     private function prepareLabelData(array $data): array
     {
         // 获取默认发件人信息

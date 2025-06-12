@@ -11,16 +11,35 @@ return [
     |
     */
     'default_shipper' => [
-        'name' => env('SHIPPING_SHIPPER_NAME', ''),
-        'address' => [
-            'street' => env('SHIPPING_SHIPPER_STREET', ''),
-            'city' => env('SHIPPING_SHIPPER_CITY', ''),
-            'state' => env('SHIPPING_SHIPPER_STATE', ''),
-            'postal_code' => env('SHIPPING_SHIPPER_POSTAL_CODE', ''),
-            'country' => env('SHIPPING_SHIPPER_COUNTRY', 'US'),
+        'contact' => [
+            'personName' => env('SHIPPING_DEFAULT_SHIPPER_NAME', ''),
+            'phoneNumber' => env('SHIPPING_DEFAULT_SHIPPER_PHONE', ''),
+            'emailAddress' => env('SHIPPING_DEFAULT_SHIPPER_EMAIL', ''),
         ],
-        'phone' => env('SHIPPING_SHIPPER_PHONE', ''),
-        'email' => env('SHIPPING_SHIPPER_EMAIL', ''),
+        'address' => [
+            'streetLines' => [env('SHIPPING_DEFAULT_SHIPPER_STREET', '')],
+            'city' => env('SHIPPING_DEFAULT_SHIPPER_CITY', ''),
+            'stateOrProvinceCode' => env('SHIPPING_DEFAULT_SHIPPER_STATE', ''),
+            'postalCode' => env('SHIPPING_DEFAULT_SHIPPER_POSTAL_CODE', ''),
+            'countryCode' => env('SHIPPING_DEFAULT_SHIPPER_COUNTRY', 'US'),
+        ],
+        'isResidential' => false,
+    ],
+
+    'default_return_address' => [
+        'contact' => [
+            'personName' => env('SHIPPING_DEFAULT_RETURN_NAME', ''),
+            'phoneNumber' => env('SHIPPING_DEFAULT_RETURN_PHONE', ''),
+            'emailAddress' => env('SHIPPING_DEFAULT_RETURN_EMAIL', ''),
+        ],
+        'address' => [
+            'streetLines' => [env('SHIPPING_DEFAULT_RETURN_STREET', '')],
+            'city' => env('SHIPPING_DEFAULT_RETURN_CITY', ''),
+            'stateOrProvinceCode' => env('SHIPPING_DEFAULT_RETURN_STATE', ''),
+            'postalCode' => env('SHIPPING_DEFAULT_RETURN_POSTAL_CODE', ''),
+            'countryCode' => env('SHIPPING_DEFAULT_RETURN_COUNTRY', 'US'),
+        ],
+        'isResidential' => false,
     ],
 
     /*
@@ -55,9 +74,14 @@ return [
     'default_carrier' => env('SHIPPING_DEFAULT_CARRIER', 'fedex'),
 
     'carriers' => [
-        'fedex' => [],
+        'fedex' => [
+            'test_url' => 'https://apis-sandbox.fedex.com',
+            'live_url' => 'https://apis.fedex.com',
+        ],
         'ups' => [
             'use_negotiated_rates' => env('UPS_USE_NEGOTIATED_RATES', true),
+            'test_url' => 'https://wwwcie.ups.com',
+            'live_url' => 'https://onlinetools.ups.com',
         ],
     ],
 ]; 

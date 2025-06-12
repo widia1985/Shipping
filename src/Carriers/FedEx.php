@@ -153,6 +153,137 @@ class FedEx extends AbstractCarrier
         return json_decode($response->getBody()->getContents(), true);
     }
 
+    /**
+     * 创建退货标签
+     */
+    public function createReturnLabel(array $data): array
+    {
+        if (!$this->token) {
+            throw new \Exception('FedEx account not set');
+        }
+
+        $response = $this->client->post('/ship/v1/returns', [
+            'json' => $this->prepareReturnLabelData($data)
+        ]);
+
+        $result = json_decode($response->getBody()->getContents(), true);
+
+        // 保存标签信息
+        $this->saveLabelInfo($data, $result);
+
+        return $result;
+    }
+
+    /**
+     * 准备退货标签数据
+     */
+    private function prepareReturnLabelData(array $data): array
+    {
+        $formattedAddress = $this->addressFormatter->format($data, $data['service_type']);
+
+        // 如果没有提供退货地址，使用默认退货地址
+        if (empty($formattedAddress['return_address'])) {
+            $formattedAddress['return_address'] = config('shipping.default_return_address');
+        }
+
+        $requestedShipment = [
+            'shipper' => $this->formatAddress($formattedAddress['shipper']), // 客户地址
+            'recipients' => [$this->formatAddress($formattedAddress['return_address'])], // 退货地址
+            'pickupType' => 'DROPOFF_AT_FEDEX_LOCATION',
+            'serviceType' => $this->mapServiceType($formattedAddress['service_type']),
+            'packagingType' => 'YOUR_PACKAGING',
+            'totalPackageCount' => 1,
+            'requestedPackageLineItems' => [
+                [
+                    'PackagingType' => [
+                        'Code' => '02'
+                    ],
+                    'Dimensions' => [
+                        'UnitOfMeasurement' => [
+                            'Code' => 'IN'
+                        ],
+                        'Length' => $data['package']['length'],
+                        'Width' => $data['package']['width'],
+                        'Height' => $data['package']['height']
+                    ],
+                    'PackageWeight' => [
+                        'UnitOfMeasurement' => [
+                            'Code' => 'LBS'
+                        ],
+                        'Weight' => $data['package']['weight']
+                    ]
+                ]
+            ],
+            'labelSpecification' => [
+                'imageType' => 'PDF',
+                'labelStockType' => 'PAPER_4X6'
+            ],
+            'returnShipmentDetail' => [
+                'returnType' => 'PRINT_RETURN_LABEL',
+                'rma' => [
+                    'number' => $data['rma_number'] ?? '',
+                    'reason' => $data['return_reason']
+                ],
+                'returnInstructions' => $data['return_instructions'] ?? '',
+                'returnAuthorizationNumber' => $data['return_authorization_number'] ?? '',
+                'originalTrackingNumber' => $data['original_tracking_number']
+            ]
+        ];
+
+        // 添加签名要求
+        if (!empty($data['signature_required'])) {
+            $requestedShipment['shipmentSpecialServices'] = [
+                'specialServiceTypes' => ['SIGNATURE_OPTION'],
+                'signatureOptionDetail' => [
+                    'optionType' => $this->mapSignatureType($data['signature_type'] ?? 'DIRECT')
+                ]
+            ];
+        }
+
+        // 添加发货通知
+        if (!empty($data['ship_notify']) && !empty($data['ship_notify_email'])) {
+            $requestedShipment['shipmentSpecialServices'] = array_merge(
+                $requestedShipment['shipmentSpecialServices'] ?? ['specialServiceTypes' => []],
+                [
+                    'specialServiceTypes' => array_merge(
+                        $requestedShipment['shipmentSpecialServices']['specialServiceTypes'] ?? [],
+                        ['EVENT_NOTIFICATION']
+                    ),
+                    'eventNotificationDetail' => [
+                        'aggregationType' => 'PER_SHIPMENT',
+                        'personalMessage' => $data['ship_notify_message'] ?? 'Your return shipment has been processed.',
+                        'eventNotifications' => [
+                            [
+                                'role' => 'SHIPPER',
+                                'events' => ['ON_SHIPMENT'],
+                                'notificationDetail' => [
+                                    'notificationType' => 'EMAIL',
+                                    'emailDetail' => [
+                                        'emailAddress' => $data['ship_notify_email'],
+                                        'name' => $data['ship_notify_contact_name'] ?? '',
+                                        'notificationEventType' => ['ON_SHIPMENT'],
+                                        'format' => 'HTML',
+                                        'localization' => [
+                                            'languageCode' => $data['ship_notify_language'] ?? 'en',
+                                            'localeCode' => $data['ship_notify_dialect'] ?? 'US'
+                                        ]
+                                    ]
+                                ],
+                                'formatSpecification' => [
+                                    'type' => 'HTML'
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            );
+        }
+
+        return [
+            'requestedShipment' => $requestedShipment
+        ];
+    }
+
     private function formatAddress(array $address): array
     {
         $formattedAddress = [
