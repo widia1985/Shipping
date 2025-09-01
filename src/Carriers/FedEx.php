@@ -2,7 +2,6 @@
 
 namespace Widia\Shipping\Carriers;
 
-use Widia\Shipping\Models\Token;
 use Widia\Shipping\Address\AddressFormatter;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
@@ -11,33 +10,44 @@ use Widia\Shipping\Models\ShippingLabel;
 
 class FedEx extends AbstractCarrier
 {
-    protected string $test_url = 'https://apis-sandbox.fedex.com';
-    protected string $live_url = 'https://apis.fedex.com';
-    protected string $url;
-    protected ?Token $token = null;
-    protected AddressFormatter $addressFormatter;
-    protected array $internationalServices = [
+    protected $test_url = 'https://apis-sandbox.fedex.com';
+    protected $live_url = 'https://apis.fedex.com';
+    protected $url;
+    protected $token = null;
+    protected $addressFormatter;
+    protected $internationalServices = [
         'INTERNATIONAL_ECONOMY',
         'INTERNATIONAL_PRIORITY',
         'INTERNATIONAL_FIRST',
         'INTERNATIONAL_GROUND',
     ];
-    protected string $accountName;
-    protected string $carrierAccount;
+    protected $accountName;
+    protected $carrierAccount;
+    protected $markup = 0;
 
     public function __construct()
     {
-        $this->client = new Client();
+        //$this->client = new Client();
     }
 
-    public function setAccount(string $accountName): void
+    /*public function setAccount(string $accountName): void
     {
         $this->accountName = $accountName;
-    }
+    }*/
 
     public function setCarrierAccount(string $accountNumber): void
     {
         $this->carrierAccount = $accountNumber;
+    }
+
+    public function setMarkup(float $markup): void
+    {
+        $this->markup = $markup;
+    } 
+
+    public function getMarkup(): float
+    {
+        return $this->markup;
     }
 
     public function getName(): string
@@ -45,24 +55,34 @@ class FedEx extends AbstractCarrier
         return $this->accountName ?? 'fedex';
     }
 
-    public function setAccount(string $accountNumber): self
+    public function getCarrierName(): string
     {
-        $this->token = Token::where('accountname', $accountNumber)
+        return 'fedex';
+    }
+
+    public function setAccount(string $accountName)
+    {
+        $tokenModel = config('shipping.database.models.token');
+        $applicationModel = config('shipping.database.models.application');
+        $this->accountName = $accountName;
+        $this->token = $tokenModel::where('accountname', $accountName)
             ->whereHas('application', function ($query) {
                 $query->where('type', 'fedex');
             })
             ->first();
 
         if (!$this->token) {
-            throw new \Exception("FedEx account not found: {$accountNumber}");
+            throw new \Exception("FedEx account not found: {$accountName}");
         }
 
         $application = $this->token->application;
+        $this->carrierAccount = $this->token->accountnumber;
         if (!$application) {
-            throw new \Exception("FedEx application not found for account: {$accountNumber}");
+            throw new \Exception("FedEx application not found for account: {$accountName}");
         }
 
         $this->url = str_contains(strtolower($application->application_name), 'sandbox') ? $this->test_url : $this->live_url;
+
         $this->client = new Client([
             'base_uri' => $this->url,
             'headers' => $this->getHeaders(),
@@ -70,7 +90,7 @@ class FedEx extends AbstractCarrier
 
         // 初始化地址格式化器
         $this->addressFormatter = new AddressFormatter(
-            $this->client,
+            $this,
             '/address/v1/addresses/resolve',
             $this->internationalServices,
             'FedEx'
@@ -89,7 +109,7 @@ class FedEx extends AbstractCarrier
         return [
             'Authorization' => 'Bearer ' . $this->getAccessToken(),
             'Content-Type' => 'application/json',
-            'X-locale' => 'en_US',
+            //'X-locale' => 'en_US',
         ];
     }
 
@@ -106,6 +126,14 @@ class FedEx extends AbstractCarrier
 
         try {
             $application = $this->token->application()->first();
+
+            if(!$this->client){
+                $this->client = new Client([
+                    'base_uri' => $this->url,
+                    'timeout'  => 30,
+                ]);
+            }
+
             $response = $this->client->post('/oauth/token', [
                 'form_params' => [
                     'grant_type' => 'client_credentials',
@@ -114,7 +142,7 @@ class FedEx extends AbstractCarrier
                 ],
             ]);
 
-            $data = json_decode($response->getBody()->getContents(), true);
+            $data = json_decode($response->getBody(), true);
 
             // 更新 token 信息
             $this->token->update([
@@ -146,17 +174,60 @@ class FedEx extends AbstractCarrier
         return $result;
     }
 
+    public function validateAddress(array $address): array
+    {
+        if (!$this->token) {
+            throw new \Exception('UPS account not set');
+        }
+
+        $response = $this->client->post('/address/v1/addresses/resolve', [
+            'json' => [
+                'addressesToValidate' => [$address],
+            ]
+        ]);
+
+        $result = json_decode($response->getBody(), true);
+
+        // 检查地址验证结果
+        if (!isset($result['output']['resolvedAddresses'][0])) {
+            throw new \Exception('Address validation failed');
+        }
+
+        // 如果地址有效，使用验证后的地址
+        $resolvedAddress = $result['output']['resolvedAddresses'][0];
+        $classification = $resolvedAddress['classification'] ?? '';
+
+        // 检查是否是住宅地址
+        $address['address']['isResidential'] = $classification === 'RESIDENTIAL';
+
+        //$this->isResidential = $address['address']['isResidential'];
+
+        if($classification == 'UNKNOWN') {
+            //throw new \Exception('Address validation returned UNKNOWN classification');
+        }
+        return $address;
+    }
+
     public function getRates(array $data): array
     {
         if (!$this->token) {
             throw new \Exception('FedEx account not set');
         }
 
-        $response = $this->client->post('/rate/v1/rates', [
-            'json' => $this->prepareRateData($data)
-        ]);
+        try{
+            $response = $this->client->post('/rate/v1/rates/quotes', [
+                'json' => $this->prepareRateData($data)
+            ]);
+        }
+        catch (GuzzleException $e) {
+            $body = $e->getResponse()->getBody();
+            $errorResponse = json_decode($body, true);
+            print_r($errorResponse);
+            throw new \Exception('Failed to get FedEx rates: ' . $e->getMessage());
+        }
 
-        return json_decode($response->getBody()->getContents(), true);
+
+        return json_decode($response->getBody(), true);
     }
 
     public function trackShipment(string $trackingNumber): array
@@ -168,6 +239,20 @@ class FedEx extends AbstractCarrier
         $response = $this->client->get("/track/v1/details/{$trackingNumber}");
         
         return json_decode($response->getBody()->getContents(), true);
+    }
+
+    public function cancelLabel(string $trackingNumber): bool
+    {
+        if (!$this->token) {
+            throw new \Exception('FedEx account not set');
+        }
+
+        try {
+            $response = $this->client->delete("/ship/v1/labels/{$trackingNumber}");
+            return $response->getStatusCode() === 200;
+        } catch (GuzzleException $e) {
+            throw new \Exception('Failed to cancel FedEx label: ' . $e->getMessage());
+        }
     }
 
     /**
@@ -329,6 +414,9 @@ class FedEx extends AbstractCarrier
 
     private function mapServiceType(string $serviceType): string
     {
+        if(empty($serviceType) || !is_string($serviceType)){
+            $serviceType = 'GROUND SERVICE';
+        }
         // 标准化服务类型名称
         $serviceType = $this->normalizeServiceType($serviceType);
 
@@ -656,7 +744,7 @@ class FedEx extends AbstractCarrier
         }
 
         // 如果是国际订单，添加商业发票和形式发票信息，清关费由客户支付
-        if ($this->isInternationalShipment($formattedAddress['shipper']['address']['countryCode'], $formattedAddress['recipient']['address']['countryCode'])) {
+        if ($this->isInternationalShipment($shipper['address']['countryCode'], $formattedAddress['address']['countryCode'])) {
             $requestedShipment['customsClearanceDetail'] = [
                 'dutiesPayment' => [
                     'paymentType' => 'RECIPIENT' // 默认收货方支付清关税
@@ -828,11 +916,18 @@ class FedEx extends AbstractCarrier
 
     private function prepareRateData(array $data): array
     {
-        $formattedAddress = $this->addressFormatter->format($data, $data['service_type']);
-        
+        // 获取默认发件人信息
+        $defaultShipper = config('shipping.default_shipper');
+  
+        // 合并默认发件人信息和传入的数据
+        $data['shipper'] = array_merge($defaultShipper, $data['shipper'] ?? []);
+
+        $data['service_type'] = isset($data['service_type'])?:null;
+        $formattedAddress = $this->addressFormatter->format($data['recipient'], $data['service_type']);
+  
         // 获取格式化后的地址
-        $shipperAddress = $this->formatAddress($formattedAddress['shipper']);
-        $recipientAddress = $this->formatAddress($formattedAddress['recipient']);
+        //$shipperAddress = $this->formatAddress($formattedAddress['shipper']);
+       // $recipientAddress = $this->formatAddress($formattedAddress['recipient']);
 
         // 确定最终的服务类型
         $serviceType = $this->mapServiceType($formattedAddress['service_type']);
@@ -841,17 +936,19 @@ class FedEx extends AbstractCarrier
         $packageLineItems = [];
         if (isset($data['packages']) && is_array($data['packages'])) {
             // 多个包裹的情况
-            foreach ($data['packages'] as $index => $package) {
+            $index = 0;
+            foreach ($data['packages'] as $package) {
+                $index++;
                 $packageLineItems[] = [
-                    'sequenceNumber' => $index + 1,
+                    'sequenceNumber' => $index,
                     'weight' => [
                         'units' => 'LB',
-                        'value' => $package['weight']
+                        'value' => (float)$package['weight']
                     ],
                     'dimensions' => [
-                        'length' => $package['length'],
-                        'width' => $package['width'],
-                        'height' => $package['height'],
+                        'length' => (float)$package['length'],
+                        'width' => (float)$package['width'],
+                        'height' => (float)$package['height'],
                         'units' => 'IN'
                     ]
                 ];
@@ -862,35 +959,47 @@ class FedEx extends AbstractCarrier
                 'sequenceNumber' => 1,
                 'weight' => [
                     'units' => 'LB',
-                    'value' => $data['weight']
+                    'value' => (float)$data['package']['weight']
                 ],
                 'dimensions' => [
-                    'length' => $data['length'],
-                    'width' => $data['width'],
-                    'height' => $data['height'],
+                    'length' => (float)$data['package']['length'],
+                    'width' => (float)$data['package']['width'],
+                    'height' => (float)$data['package']['height'],
                     'units' => 'IN'
                 ]
             ];
         }
 
-        $requestedShipment = [
-            'shipper' => $shipperAddress,
-            'recipient' => $recipientAddress,
-            'pickupType' => 'DROPOFF_AT_FEDEX_LOCATION',
-            'serviceType' => $serviceType,
-            'packagingType' => 'YOUR_PACKAGING',
-            'requestedPackageLineItems' => $packageLineItems
-        ];
-
         // 添加签名要求
         if (!empty($data['signature_required'])) {
-            $requestedShipment['shipmentSpecialServices'] = [
+            /*$requestedShipment['shipmentSpecialServices'] = [
                 'specialServiceTypes' => ['SIGNATURE_OPTION'],
                 'signatureOptionDetail' => [
                     'optionType' => $this->mapSignatureType($data['signature_type'] ?? 'DIRECT')
                 ]
-            ];
+            ];*/
+            $signatureOptionType = $this->mapSignatureType($data['signature_type'] ?? 'DIRECT');
+            foreach($packageLineItems as $key => $item){
+                $packageLineItems[$key]['packageSpecialServices'] = [
+                    'signatureOptionType' => $signatureOptionType
+                ];
+            }
         }
+
+        unset($formattedAddress['service_type']);
+        $formattedAddress['address']['residential'] = False;
+        if($formattedAddress['address']['isResidential']){
+            $formattedAddress['address']['residential'] = True;
+        } 
+        $requestedShipment = [
+            'shipper' => $data['shipper'] ,
+            'recipient' => $formattedAddress,
+            'pickupType' => 'USE_SCHEDULED_PICKUP',
+            'rateRequestType' => ["LIST", "ACCOUNT"],
+            //'serviceType' => $serviceType,
+            'packagingType' => 'YOUR_PACKAGING',
+            'requestedPackageLineItems' => $packageLineItems
+        ];
 
         // 如果存在DepartmentNotes，添加到请求中
         if (!empty($data['DepartmentNotes'])) {
@@ -915,7 +1024,7 @@ class FedEx extends AbstractCarrier
         }
 
         // 国际订单处理
-        if ($this->isInternationalShipment($formattedAddress['shipper']['address']['countryCode'], $formattedAddress['recipient']['address']['countryCode'])) {
+        if ($this->isInternationalShipment($data['shipper']['address']['countryCode'], $formattedAddress['address']['countryCode'])) {
             $requestedShipment['customsClearanceDetail'] = [
                 'dutiesPayment' => [
                     'paymentType' => 'RECIPIENT' // 默认收货方支付清关税
@@ -983,13 +1092,19 @@ class FedEx extends AbstractCarrier
                 ];
             }
         }
-
-        return [
-            'accountNumber' => [
-                'value' => $this->token->accountname
-            ],
-            'requestedShipment' => $requestedShipment
-        ];
+//print_r($requestedShipment);
+        if($this->carrierAccount){
+            return [
+                'accountNumber' => [
+                    'value' => $this->carrierAccount
+                ],
+                'requestedShipment' => $requestedShipment
+            ];
+        } else {
+            return [
+                'requestedShipment' => $requestedShipment
+            ];
+        }
     }
 
     private function mapSignatureType(string $type): string

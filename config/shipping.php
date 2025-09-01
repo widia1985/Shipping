@@ -84,4 +84,14 @@ return [
             'live_url' => 'https://onlinetools.ups.com',
         ],
     ],
+    'Blend_Ups_Production_Using' => [
+        'account_number' => env('BLEND_UPS_ACCOUNT','XXXX'),
+        'markup' => env('BLEND_UPS_MARKUP', 0.2),
+    ],
+    'Arex_Fedex_Production' => [
+        'account_number' => env('AREX_FEDEX_ACCOUNT','XXXXX'),
+    ],
+    'Alpharex_Ups_Production' => [
+        'account_number' => env('AREX_UPS_ACCOUNT','XXXX'),
+    ]
 ]; 

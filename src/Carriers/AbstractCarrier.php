@@ -7,8 +7,8 @@ use GuzzleHttp\Client;
 
 abstract class AbstractCarrier implements CarrierInterface
 {
-    protected Client $client;
-    protected array $config;
+    protected $client;
+    protected $config;
 
     public function __construct(array $config)
     {
