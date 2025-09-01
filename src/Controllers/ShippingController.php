@@ -8,14 +8,16 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use Widia\Shipping\Models\ShippingLabel;
+use Illuminate\Routing\Controller;
 
-class ShippingController
+class ShippingController extends Controller
 {
     protected $shipping;
 
     public function __construct()
     {
         $this->shipping = new Shipping();
+        $this->middleware('auth:api');
     }
 
     /**
@@ -91,26 +93,19 @@ class ShippingController
     public function createLabel(Request $request): JsonResponse
     {
         try {
-            // 验证用户是否已认证
-            if (!Auth::check()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized'
-                ], 401);
-            }
-
             $validator = Validator::make($request->all(), [
-                'carrier' => 'required|string|in:ups,fedex',
+                'carrier' => 'required|string|in:ups,fedex,UPS,FEDEX,Fedex',
+                'account_name' => 'required|string',
                 'account_number' => 'required|string',
-                'shipper' => 'required|array',
-                'shipper.contact.personName' => 'required|string',
+                //'shipper' => 'required|array',
+                /*'shipper.contact.personName' => 'required|string',
                 'shipper.contact.phoneNumber' => 'required|string',
                 'shipper.contact.emailAddress' => 'required|email',
                 'shipper.address.streetLines' => 'required|array',
                 'shipper.address.city' => 'required|string',
                 'shipper.address.stateOrProvinceCode' => 'required|string',
                 'shipper.address.postalCode' => 'required|string',
-                'shipper.address.countryCode' => 'required|string',
+                'shipper.address.countryCode' => 'required|string',*/
                 'recipient' => 'required|array',
                 'recipient.contact.personName' => 'required|string',
                 'recipient.contact.phoneNumber' => 'required|string',
@@ -120,16 +115,16 @@ class ShippingController
                 'recipient.address.stateOrProvinceCode' => 'required|string',
                 'recipient.address.postalCode' => 'required|string',
                 'recipient.address.countryCode' => 'required|string',
-                'package' => 'required|array',
-                'package.weight' => 'required|numeric',
-                'package.length' => 'required|numeric',
-                'package.width' => 'required|numeric',
-                'package.height' => 'required|numeric',
+                'packages' => 'required|array',
+                'packages.*.weight' => 'required|numeric',
+                'packages.*.length' => 'required|numeric',
+                'packages.*.width' => 'required|numeric',
+                'packages.*.height' => 'required|numeric',
                 'service_type' => 'required|string',
                 'signature_required' => 'boolean',
-                'signature_type' => 'string|in:DIRECT,INDIRECT,ADULT',
-                'ship_notify' => 'boolean',
-                'ship_notify_email' => 'email',
+                'signature_type' => 'string|in:DIRECT,INDIRECT,ADULT,NO_SIGNATURE_REQUIRED',
+                'ship_notify' => 'array',
+                //'reference_number' => 'array',
             ]);
 
             if ($validator->fails()) {
@@ -140,8 +135,7 @@ class ShippingController
                 ], 422);
             }
 
-            $label = $this->shipping->setCarrier($request->carrier)
-                ->setAccount($request->account_number)
+            $label = $this->shipping->setCarrier([$request->carrier=>[$request->account_name=>$request->account_number]])
                 ->createLabel($request->all());
 
             return response()->json([
@@ -149,9 +143,17 @@ class ShippingController
                 'data' => $label
             ]);
         } catch (\Exception $e) {
+            if(method_exists($e, 'getResponse')){
+                $jsonStr = $e->getResponse()->getBody()->getContents();
+                $data = json_decode($jsonStr, true);
+                $message = $data['response']['errors'][0]['message'] ?? $e->getMessage();
+            }
+            else{
+                $message = $e->getMessage();
+            }
             return response()->json([
                 'success' => false,
-                'message' => $e->getMessage()
+                'message' => $message //$e->getMessage()
             ], 400);
         }
     }
@@ -506,18 +508,40 @@ class ShippingController
     public function getLabel(Request $request, string $id): JsonResponse
     {
         try {
-            if (!Auth::check()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized'
-                ], 401);
+            $labelModel = config('shipping.database.models.shipping_label');
+            $id = decrypt($id);
+            $label = $labelModel::find($id);
+            if(!$label || !$label->label_url){
+                throw new \Exception('Label not found or label URL is missing');
             }
-
-            $label = ShippingLabel::findOrFail($id);
 
             return response()->json([
                 'success' => true,
                 'data' => $label
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage()
+            ], 400);
+        }
+    }
+
+    /**
+     * 获取运单label供打印
+     */
+    public function getLabelByTrackingNumber(Request $request, string $trackingnumber): JsonResponse
+    {
+        try {
+            $labelModel = config('shipping.database.models.shipping_label');
+            $label = $labelModel::where('tracking_number',$trackingnumber)->first();
+            if(!$label || !$label->label_url){
+                throw new \Exception('Label not found or label URL is missing');
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $label->label_url
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -530,286 +554,34 @@ class ShippingController
     /**
      * 取消运单
      */
-    public function cancelLabel(Request $request, string $id): JsonResponse
+    public function voidLabel(Request $request, string $id): JsonResponse
     {
         try {
-            if (!Auth::check()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized'
-                ], 401);
+            $labelModel = config('shipping.database.models.shipping_label');
+            try{
+                $id = decrypt($id);
+                $label = $labelModel::find($id);
+            }
+            catch(\Exception $e){
+                $label = $labelModel::where('tracking_number',$id)->first();
+                if(!$label)
+                throw new \Exception('Invalid label ID');
             }
 
-            $label = ShippingLabel::findOrFail($id);
+            if(!$label || !$label->label_url){
+                throw new \Exception('Label not found');
+            }
 
             // 检查运单状态
             if ($label->status !== 'ACTIVE') {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Only active labels can be cancelled'
-                ], 400);
+                throw new \Exception('Only active labels can be cancelled');
             }
 
-            // 调用承运商API取消运单
-            $result = $this->shipping->setCarrier($label->carrier)
-                ->setAccount($label->account_number)
-                ->cancelLabel($label->tracking_number);
-
-            // 更新运单状态
-            $label->update([
-                'status' => 'CANCELLED',
-                'cancelled_at' => now(),
-                'cancellation_data' => $result
-            ]);
+            $label->void();
 
             return response()->json([
                 'success' => true,
-                'data' => $label
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => $e->getMessage()
-            ], 400);
-        }
-    }
-
-    /**
-     * 重新打印运单标签
-     */
-    public function reprintLabel(Request $request, string $id): JsonResponse
-    {
-        try {
-            if (!Auth::check()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized'
-                ], 401);
-            }
-
-            $label = ShippingLabel::findOrFail($id);
-
-            // 检查运单状态
-            if ($label->status !== 'ACTIVE') {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Only active labels can be reprinted'
-                ], 400);
-            }
-
-            // 调用承运商API重新打印标签
-            $result = $this->shipping->setCarrier($label->carrier)
-                ->setAccount($label->account_number)
-                ->reprintLabel($label->tracking_number);
-
-            // 更新标签URL
-            $label->update([
-                'label_url' => $result['label_url'] ?? $label->label_url,
-                'label_data' => array_merge($label->label_data ?? [], $result)
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'data' => [
-                    'label' => $label,
-                    'label_url' => $result['label_url'] ?? $label->label_url
-                ]
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => $e->getMessage()
-            ], 400);
-        }
-    }
-
-    /**
-     * 重新打印商业发票
-     */
-    public function reprintInvoice(Request $request, string $id): JsonResponse
-    {
-        try {
-            if (!Auth::check()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized'
-                ], 401);
-            }
-
-            $label = ShippingLabel::findOrFail($id);
-
-            // 检查是否是国际运单
-            if (!$this->isInternationalShipment($label->shipper_info['address']['countryCode'], $label->recipient_info['address']['countryCode'])) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Commercial invoice is only available for international shipments'
-                ], 400);
-            }
-
-            // 调用承运商API重新打印商业发票
-            $result = $this->shipping->setCarrier($label->carrier)
-                ->setAccount($label->account_number)
-                ->reprintInvoice($label->tracking_number);
-
-            return response()->json([
-                'success' => true,
-                'data' => [
-                    'invoice_url' => $result['invoice_url']
-                ]
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => $e->getMessage()
-            ], 400);
-        }
-    }
-
-    /**
-     * 批量取消运单
-     */
-    public function bulkCancelLabels(Request $request): JsonResponse
-    {
-        try {
-            if (!Auth::check()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized'
-                ], 401);
-            }
-
-            $validator = Validator::make($request->all(), [
-                'label_ids' => 'required|array',
-                'label_ids.*' => 'required|exists:shipping_labels,id'
-            ]);
-
-            if ($validator->fails()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Validation failed',
-                    'errors' => $validator->errors()
-                ], 422);
-            }
-
-            $results = [
-                'success' => [],
-                'failed' => []
-            ];
-
-            foreach ($request->label_ids as $labelId) {
-                try {
-                    $label = ShippingLabel::findOrFail($labelId);
-                    
-                    if ($label->status !== 'ACTIVE') {
-                        $results['failed'][] = [
-                            'id' => $labelId,
-                            'reason' => 'Label is not active'
-                        ];
-                        continue;
-                    }
-
-                    // 调用承运商API取消运单
-                    $result = $this->shipping->setCarrier($label->carrier)
-                        ->setAccount($label->account_number)
-                        ->cancelLabel($label->tracking_number);
-
-                    // 更新运单状态
-                    $label->update([
-                        'status' => 'CANCELLED',
-                        'cancelled_at' => now(),
-                        'cancellation_data' => $result
-                    ]);
-
-                    $results['success'][] = $labelId;
-                } catch (\Exception $e) {
-                    $results['failed'][] = [
-                        'id' => $labelId,
-                        'reason' => $e->getMessage()
-                    ];
-                }
-            }
-
-            return response()->json([
-                'success' => true,
-                'data' => $results
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => $e->getMessage()
-            ], 400);
-        }
-    }
-
-    /**
-     * 批量重新打印运单标签
-     */
-    public function bulkReprintLabels(Request $request): JsonResponse
-    {
-        try {
-            if (!Auth::check()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized'
-                ], 401);
-            }
-
-            $validator = Validator::make($request->all(), [
-                'label_ids' => 'required|array',
-                'label_ids.*' => 'required|exists:shipping_labels,id'
-            ]);
-
-            if ($validator->fails()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Validation failed',
-                    'errors' => $validator->errors()
-                ], 422);
-            }
-
-            $results = [
-                'success' => [],
-                'failed' => []
-            ];
-
-            foreach ($request->label_ids as $labelId) {
-                try {
-                    $label = ShippingLabel::findOrFail($labelId);
-                    
-                    if ($label->status !== 'ACTIVE') {
-                        $results['failed'][] = [
-                            'id' => $labelId,
-                            'reason' => 'Label is not active'
-                        ];
-                        continue;
-                    }
-
-                    // 调用承运商API重新打印标签
-                    $result = $this->shipping->setCarrier($label->carrier)
-                        ->setAccount($label->account_number)
-                        ->reprintLabel($label->tracking_number);
-
-                    // 更新标签URL
-                    $label->update([
-                        'label_url' => $result['label_url'] ?? $label->label_url,
-                        'label_data' => array_merge($label->label_data ?? [], $result)
-                    ]);
-
-                    $results['success'][] = [
-                        'id' => $labelId,
-                        'label_url' => $result['label_url'] ?? $label->label_url
-                    ];
-                } catch (\Exception $e) {
-                    $results['failed'][] = [
-                        'id' => $labelId,
-                        'reason' => $e->getMessage()
-                    ];
-                }
-            }
-
-            return response()->json([
-                'success' => true,
-                'data' => $results
+                'message' => 'Label cancelled successfully',
             ]);
         } catch (\Exception $e) {
             return response()->json([

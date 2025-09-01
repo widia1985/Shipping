@@ -9,6 +9,12 @@ Route::prefix('shipping')->group(function () {
     
     // 创建运单
     Route::post('/labels', [ShippingController::class, 'createLabel']);
+
+    Route::get('/getLabel/{id}', [ShippingController::class, 'getLabel']);
+
+    Route::get('/getLabelByTrackingNumber/{trackingnumber}', [ShippingController::class, 'getLabelByTrackingNumber']);
+    
+    Route::post('/voidlabel/{id}', [ShippingController::class, 'voidLabel']);
     
     // 查询包裹状态
     Route::get('/tracking/{tracking_number}', [ShippingController::class, 'trackShipment']);
@@ -20,5 +26,5 @@ Route::prefix('shipping')->group(function () {
     Route::post('/cheapest-rate', [ShippingController::class, 'getCheapestRate']);
     
     // 创建退货标签
-    Route::post('/return-labels', [ShippingController::class, 'createReturnLabel']);
+    Route::post('/createReturnLabel', [ShippingController::class, 'createReturnLabel']);
 }); 

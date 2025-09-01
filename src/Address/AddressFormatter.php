@@ -7,7 +7,7 @@ use GuzzleHttp\Exception\GuzzleException;
 
 class AddressFormatter
 {
-    protected array $countryCodeMap = [
+    protected $countryCodeMap = [
         'UNITED STATES' => 'US',
         'USA' => 'US',
         'U.S.A.' => 'US',
@@ -83,7 +83,7 @@ class AddressFormatter
         'BURMA' => 'MM',
     ];
 
-    protected array $stateCodeMap = [
+    protected $stateCodeMap = [
         // US States
         'ALABAMA' => 'AL',
         'ALASKA' => 'AK',
@@ -165,7 +165,7 @@ class AddressFormatter
         'YUKON' => 'YT',
     ];
 
-    protected array $serviceTypeMap = [
+    protected $serviceTypeMap = [
         'UPS' => [
             'domestic' => [
                 'GROUND' => '03',
@@ -182,17 +182,17 @@ class AddressFormatter
                 'STANDARD' => '11',
             ],
             'domestic_to_international' => [
-                'GROUND' => 'WORLDWIDE_EXPEDITED',
+                'GROUND' => 'STANDARD',
                 'NEXT_DAY_AIR' => 'WORLDWIDE_EXPRESS',
                 'SECOND_DAY_AIR' => 'WORLDWIDE_EXPEDITED',
                 'THREE_DAY_SELECT' => 'WORLDWIDE_EXPEDITED',
                 'NEXT_DAY_AIR_SAVER' => 'WORLDWIDE_EXPRESS',
                 'NEXT_DAY_AIR_EARLY' => 'WORLDWIDE_EXPRESS',
-                'SECOND_DAY_AIR_AM' => 'WORLDWIDE_EXPRESS',
+                'SECOND_DAY_AIR_AM' => 'WORLDWIDE_EXPEDITED',
             ],
             'international_to_domestic' => [
                 'WORLDWIDE_EXPRESS' => 'NEXT_DAY_AIR',
-                'WORLDWIDE_EXPEDITED' => 'GROUND',
+                'WORLDWIDE_EXPEDITED' => 'SECOND_DAY_AIR',
                 'STANDARD' => 'GROUND',
             ],
         ],
@@ -228,16 +228,16 @@ class AddressFormatter
         ],
     ];
 
-    protected Client $client;
-    protected string $validationUrl;
-    protected array $internationalServices;
-    protected string $carrier;
-    protected bool $isResidential = false;
-    protected string $currentCountryCode = '';
+    protected $ocarrier;
+    protected $validationUrl;
+    protected $internationalServices;
+    protected $carrier;
+    protected $isResidential = false;
+    protected $currentCountryCode = '';
 
-    public function __construct(Client $client, string $validationUrl, array $internationalServices = [], string $carrier = 'UPS')
+    public function __construct($ocarrier, string $validationUrl, array $internationalServices = [], string $carrier = 'UPS')
     {
-        $this->client = $client;
+        $this->ocarrier = $ocarrier;
         $this->validationUrl = $validationUrl;
         $this->internationalServices = $internationalServices;
         $this->carrier = strtoupper($carrier);
@@ -245,6 +245,10 @@ class AddressFormatter
 
     public function format(array $address, string $serviceType = null): array
     {
+        if(!$serviceType){
+            $serviceType = 'GROUND';
+        }
+
         // 1. 转换国家代码
         $this->currentCountryCode = $this->normalizeCountryCode($address['address']['countryCode'] ?? $address['address']['country']);
         
@@ -264,7 +268,8 @@ class AddressFormatter
             $address['address']['stateOrProvinceCode'];
 
         // 5. 格式化电话号码
-        $phoneNumber = $this->formatPhoneNumber($address['contact']['phoneNumber'], $this->currentCountryCode);
+        if(isset($address['address']['contact']['phoneNumber']))
+        $address['address']['contact']['phoneNumber'] = $this->formatPhoneNumber($address['address']['contact']['phoneNumber'], $this->currentCountryCode);
 
         // 6. 清理和格式化地址行
         $streetLines = $this->cleanAddressLines($address['address']['streetLines']);
@@ -275,15 +280,19 @@ class AddressFormatter
                 'streetLines' => $streetLines,
                 'city' => $address['address']['city'],
                 'stateOrProvinceCode' => $stateCode,
-                'postalCode' => $address['address']['postalCode'],
+                'postalCode' => $address['address']['postal_code']??$address['address']['postalCode'],
                 'countryCode' => $this->currentCountryCode
-            ],
-            'contact' => [
-                'personName' => $address['contact']['personName'],
-                'phoneNumber' => $phoneNumber,
-                'emailAddress' => $address['contact']['emailAddress']
             ]
         ]);
+
+        if(!isset($validatedAddress['address']['isResidential'])){
+            $this->isResidential = $address['address']['isResidential'] ?? false;
+            $validatedAddress['address']['isResidential'] = $this->isResidential;
+        }
+
+        if(isset($address['address']['contact'])){
+            $validatedAddress['contact'] = $address['address']['contact'];
+        }
 
         // 8. 添加转换后的服务类型
         if ($serviceType) {
@@ -397,46 +406,45 @@ class AddressFormatter
     protected function validateAddress(array $address): array
     {
         try {
-            $response = $this->client->post($this->validationUrl, [
+            /*$response = $this->client->post($this->validationUrl, [
                 'json' => [
-                    'AddressValidationRequest' => [
-                        'Address' => [
-                            'AddressLine' => $address['address']['streetLines'],
-                            'City' => $address['address']['city'],
-                            'StateProvinceCode' => $address['address']['stateOrProvinceCode'],
-                            'PostalCode' => $address['address']['postalCode'],
-                            'CountryCode' => $address['address']['countryCode']
-                        ]
-                    ]
+                    'addressesToValidate' => [$address],
                 ]
-            ]);
+            ]);*/
 
-            $result = json_decode($response->getBody()->getContents(), true);
+            if($address['address']['countryCode'] === 'US'){
+                $address = $this->ocarrier->validateAddress($address);
+            }
+            $this->isResidential = $address['address']['isResidential'] ?? false;
             
-            // 检查地址验证结果
-            if (!isset($result['AddressValidationResponse']['ValidAddressIndicator'])) {
-                throw new \Exception('Address validation failed');
-            }
-
-            // 如果地址有效，使用验证后的地址
-            if ($result['AddressValidationResponse']['ValidAddressIndicator'] === 'Y') {
-                $validatedAddress = $result['AddressValidationResponse']['Address'];
-                $address['address'] = array_merge($address['address'], [
-                    'streetLines' => $validatedAddress['AddressLine'] ?? $address['address']['streetLines'],
-                    'city' => $validatedAddress['City'] ?? $address['address']['city'],
-                    'stateOrProvinceCode' => $validatedAddress['StateProvinceCode'] ?? $address['address']['stateOrProvinceCode'],
-                    'postalCode' => $validatedAddress['PostalCode'] ?? $address['address']['postalCode'],
-                ]);
-            }
-
-            // 检查是否是住宅地址
-            $this->isResidential = isset($result['AddressValidationResponse']['ResidentialIndicator']) && 
-                                  $result['AddressValidationResponse']['ResidentialIndicator'] === 'Y';
-            $address['isResidential'] = $this->isResidential;
-
             return $address;
         } catch (GuzzleException $e) {
-            throw new \Exception('Address validation failed: ' . $e->getMessage());
+            //print_r($e->getRequest());
+            if ($e->getRequest()->getBody()) {
+                echo "请求体：\n";
+                echo $e->getRequest()->getBody() . "\n";
+
+                echo "请求头：\n";
+                foreach ($e->getRequest()->getHeaders() as $name => $values) {
+                    echo "$name: " . implode(', ', $values) . "\n";
+                }
+            }
+
+            $error_messages = '';
+            if ($e->hasResponse()) {
+                $body = $e->getResponse()->getBody();
+                $errorResponse = json_decode($body, true);
+                if (isset($errorResponse['errors'])) {
+                    foreach ($errorResponse['errors'] as $error) {
+                        $error_messages .= $error['message'] . "\n";
+                    }
+                }
+            
+            } 
+            if(empty($error_messages) && $e->getMessage() !== '') {
+                $error_messages = $e->getMessage();
+            }
+            throw new \Exception('Address validation failed: ' . $error_messages);
         }
     }
 

@@ -2,36 +2,45 @@
 
 namespace Widia\Shipping\Carriers;
 
-use Widia\Shipping\Models\Token;
 use Widia\Shipping\Address\AddressFormatter;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Carbon\Carbon;
-use Widia\Shipping\Models\ShippingLabel;
 
 class UPS extends AbstractCarrier
 {
-    protected string $test_url = 'https://wwwcie.ups.com/api';
-    protected string $live_url = 'https://onlinetools.ups.com/api';
-    protected string $url;
-    protected ?Token $token = null;
-    protected AddressFormatter $addressFormatter;
-    protected array $internationalServices = [
+    protected $test_url = 'https://wwwcie.ups.com/api';
+    protected $live_url = 'https://onlinetools.ups.com/api';
+    protected $url;
+    protected $token = null;
+    protected $addressFormatter;
+    protected $internationalServices = [
         'WORLDWIDE_EXPRESS',
         'WORLDWIDE_EXPEDITED',
         'STANDARD',
     ];
-    protected string $accountName;
-    protected string $carrierAccount;
+    protected $accountName;
+    protected $carrierAccount;
+    protected $markup = 0.0;
 
     public function __construct()
     {
-        $this->client = new Client();
+        //$this->client = new Client();
     }
 
-    public function setAccount(string $accountName): void
+    /*public function setAccount(string $accountName): void
     {
         $this->accountName = $accountName;
+    }*/
+
+    public function setMarkup(float $markup): void
+    {
+        $this->markup = $markup;
+    }  
+
+    public function getMarkup(): float
+    {
+        return $this->markup;
     }
 
     public function setCarrierAccount(string $accountNumber): void
@@ -44,21 +53,30 @@ class UPS extends AbstractCarrier
         return $this->accountName ?? 'ups';
     }
 
-    public function setAccount(string $accountNumber): self
+    public function getCarrierName(): string
     {
-        $this->token = Token::where('accountname', $accountNumber)
+        return 'ups';
+    }
+
+    public function setAccount(string $accountName)
+    {
+        $tokenModel = config('shipping.database.models.token');
+        $applicationModel = config('shipping.database.models.application');
+        $this->accountName = $accountName;
+        $this->token = $tokenModel::where('accountname', $accountName)
             ->whereHas('application', function ($query) {
                 $query->where('type', 'ups');
             })
             ->first();
 
         if (!$this->token) {
-            throw new \Exception("UPS account not found: {$accountNumber}");
+            throw new \Exception("UPS account not found: {$accountName}");
         }
 
         $application = $this->token->application;
+        $this->carrierAccount = $this->token->accountnumber;
         if (!$application) {
-            throw new \Exception("UPS application not found for account: {$accountNumber}");
+            throw new \Exception("UPS application not found for account: {$accountName}");
         }
 
         $this->url = str_contains(strtolower($application->application_name), 'sandbox') ? $this->test_url : $this->live_url;
@@ -69,7 +87,7 @@ class UPS extends AbstractCarrier
 
         // 初始化地址格式化器
         $this->addressFormatter = new AddressFormatter(
-            $this->client,
+            $this,
             '/addressvalidation/v1/validation',
             $this->internationalServices,
             'UPS'
@@ -104,16 +122,27 @@ class UPS extends AbstractCarrier
         }
 
         try {
+            if(!$this->client){
+                $this->client = new Client([
+                    'base_uri' => $this->url,
+                    'timeout'  => 30,
+                ]);
+            }
+
             $application = $this->token->application;
+
             $response = $this->client->post('/security/v1/oauth/token', [
+                'headers' => [
+                    'Content-Type' => 'application/x-www-form-urlencoded',
+                    'x-merchant-id' => $application->application_id,
+                ],
+                'auth' => [$application->application_id, $application->shared_secret],
                 'form_params' => [
                     'grant_type' => 'client_credentials',
-                    'client_id' => $application->application_id,
-                    'client_secret' => $application->shared_secret,
                 ],
             ]);
 
-            $data = json_decode($response->getBody()->getContents(), true);
+            $data = json_decode($response->getBody(), true);
 
             // 更新 token 信息
             $this->token->update([
@@ -132,15 +161,96 @@ class UPS extends AbstractCarrier
         if (!$this->token) {
             throw new \Exception('UPS account not set');
         }
-
-        $response = $this->client->post('/api/shipments/v1/transactions', [
+//print_r($this->prepareLabelData($data));exit;
+        $response = $this->client->post('/api/shipments/v2409/ship', [
             'json' => $this->prepareLabelData($data)
         ]);
 
         $result = json_decode($response->getBody()->getContents(), true);
-
+//print_r($result);
         // 保存标签信息
-        $this->saveLabelInfo($data, $result);
+        $data = $this->saveLabelInfo($data, $result);
+
+        if(count($data)>0){
+            return $data;
+        }
+
+        return $result;
+    }
+
+    public function validateAddress(array $address): array
+    {
+        if (!$this->token) {
+            throw new \Exception('UPS account not set');
+        }
+
+        $query = array(
+            "regionalrequestindicator" => "string",
+            "maximumcandidatelistsize" => "1"
+        );
+        $response = $this->client->post('/api/addressvalidation/v2/3?' . http_build_query($query), [
+            'json' => [
+                'XAVRequest'=>[
+                    'AddressKeyFormat'=>[
+                        'AddressLine' => $address['address']['streetLines'],
+                        'PoliticalDivision2' => $address['address']['city'],
+                        'PoliticalDivision1' => $address['address']['stateOrProvinceCode'],
+                        'PostcodePrimaryLow' => $address['address']['postalCode'],
+                        'CountryCode' => $address['address']['countryCode'],
+                    ]
+                ]
+            ]
+        ]);
+
+        $result = json_decode($response->getBody(), true);
+
+        // 检查地址验证结果
+        if (!isset($result['XAVResponse']['Candidate'][0])) {
+            throw new \Exception('Address validation failed');
+        }
+
+        // 如果地址有效，使用验证后的地址
+        $resolvedAddress = $result['XAVResponse']['Candidate'][0];
+        $classification = $resolvedAddress['AddressClassification']['Code'] ?? "0";
+
+        // 检查是否是住宅地址
+        $address['address']['isResidential'] = (int)$classification === 2;
+        $address['address']['AddressClassification'] = $classification;
+
+        //$this->isResidential = $address['address']['isResidential'];
+
+        if($classification == 0) { //UNKNOW
+            //throw new \Exception('Address validation returned UNKNOWN classification');
+        }
+
+        return $address;
+    }
+
+    public function validateAddresstoResponse(array $address)
+    {
+        if (!$this->token) {
+            throw new \Exception('UPS account not set');
+        }
+
+        $query = array(
+            "regionalrequestindicator" => "string",
+            "maximumcandidatelistsize" => "1"
+        );
+        $response = $this->client->post('/api/addressvalidation/v2/3?' . http_build_query($query), [
+            'json' => [
+                'XAVRequest'=>[
+                    'AddressKeyFormat'=>[
+                        'AddressLine' => $address['address']['streetLines'],
+                        'PoliticalDivision2' => $address['address']['city'],
+                        'PoliticalDivision1' => $address['address']['stateOrProvinceCode'],
+                        'PostcodePrimaryLow' => $address['address']['postalCode'],
+                        'CountryCode' => $address['address']['countryCode'],
+                    ]
+                ]
+            ]
+        ]);
+
+        $result = json_decode($response->getBody(), true);
 
         return $result;
     }
@@ -151,7 +261,10 @@ class UPS extends AbstractCarrier
             throw new \Exception('UPS account not set');
         }
 
-        $response = $this->client->post('/rating/v1/Shop', [
+        $query = array(
+                "additionalinfo" => ""
+        );
+        $response = $this->client->post('/api/rating/v2409/Rate'. '?' . http_build_query($query), [
             'json' => $this->prepareRateData($data)
         ]);
 
@@ -167,6 +280,31 @@ class UPS extends AbstractCarrier
         $response = $this->client->get("/track/v1/details/{$trackingNumber}");
         
         return json_decode($response->getBody()->getContents(), true);
+    }
+
+    public function cancelLabel(string $trackingNumber): bool
+    {
+        if (!$this->token) {
+            throw new \Exception('UPS account not set');
+        }
+
+        try {
+            $response = $this->client->delete("/api/shipments/v2409/void/cancel/{$trackingNumber}");
+            return $response->getStatusCode() === 200;
+        } catch (GuzzleException $e) {
+            if(method_exists($e, 'getResponse') && $e->getResponse()){
+                $response = json_decode($e->getResponse()->getBody()->getContents(), true);
+                if(isset($response['response']['errors'])){
+                    $errors = $response['response']['errors'];
+                    if(is_array($errors) && count($errors) > 0){
+                        $errorMessage = implode(', ', array_column($errors, 'message'));
+                        throw new \Exception($errorMessage);
+                    }
+                }
+                throw new \Exception( $e->getResponse()->getBody()->getContents());
+            }
+            throw new \Exception($e->getMessage());
+        }
     }
 
     /**
@@ -275,85 +413,141 @@ class UPS extends AbstractCarrier
 
     private function prepareLabelData(array $data): array
     {
-        // 获取默认发件人信息
-        $defaultShipper = config('shipping.default_shipper');
-        
-        // 合并默认发件人信息和传入的数据
-        $data['shipper'] = array_merge($defaultShipper, $data['shipper'] ?? []);
+        $formattedAddress = $this->addressFormatter->format($data['recipient'], $data['service_type']);
 
-        $formattedAddress = $this->addressFormatter->format($data, $data['service_type']);
+        //如果UPS API地址验证结果不能识别是住宅地址，使用用户输入的地址类型
+        if($formattedAddress['address']['AddressClassification'] == 0){
+            $formattedAddress['address']['isResidential'] = $data['recipient']['address']['isResidential'] ?? false;
+        }
+        unset($formattedAddress['address']['AddressClassification']);
 
+        $formattedAddress['contact'] = $data['recipient']['contact'] ?? [];
         // 处理包裹数据
         $packages = [];
+        $data['reference_number'] = [];
+
+        if(isset($data['invoice_number']) && !empty($data['invoice_number'])){
+            $data['reference_number'][] = [
+                'Code' => 'IK', // Invoice Number
+                'Value' => $data['invoice_number']
+            ];
+        }
+
+        if(isset($data['customer_po_number']) && !empty($data['customer_po_number'])){
+            $data['reference_number'][] = [
+                'Code' => 'PO', // Customer PO Number
+                'Value' => $data['customer_po_number']
+            ];
+        }
+
+        if(isset($data['market_order_id']) && !empty($data['market_order_id'])){
+            $data['reference_number'][] = [
+                'Code' => 'MO', // Market Order ID
+                'Value' => $data['market_order_id']
+            ];
+        }
+
+        $InvoiceLineTotal = 0;
         if (isset($data['packages']) && is_array($data['packages'])) {
+            
             // 多个包裹的情况
             foreach ($data['packages'] as $index => $package) {
+                $InvoiceLineTotal += $package['value']  ?? 0; // 累加包裹的价值
                 $packages[] = [
-                    'PackagingType' => [
-                        'Code' => '02'
+                    'Packaging' => [
+                        'Code' => $data['package_type'] ?? '02'
                     ],
                     'Dimensions' => [
                         'UnitOfMeasurement' => [
                             'Code' => 'IN'
                         ],
-                        'Length' => $package['length'],
-                        'Width' => $package['width'],
-                        'Height' => $package['height']
+                        'Length' => strval(max(1, (int)$package['length'])),
+                        'Width' => strval(max(1, (int)$package['width'])),
+                        'Height' => strval(max(1, (int)$package['height']))
                     ],
                     'PackageWeight' => [
                         'UnitOfMeasurement' => [
                             'Code' => 'LBS'
                         ],
-                        'Weight' => $package['weight']
+                        'Weight' => strval(number_format($package['weight'], 1, '.', ''))
+                    ],
+                    'ReferenceNumber' => array_merge($data['reference_number']??[],[
+                        [
+                            //'BarCodeIndicator' => "true", // 1 = 条形码指示符
+                            'Code' => 'EI', // 02 = 参考号码
+                            'Value' => (string)$package['box_id'] ?? '00'
+                        ]
+                    ]),
+                    'PackageServiceOptions' => [
+                        'DeliveryConfirmation' => (!empty($data['signature_required']) && $data['signature_required'] && $formattedAddress['address']['countryCode'] == 'US')  ? [
+                            'DCISType' => $this->mapSignatureType($data['signature_type'] ?? '')
+                        ] : null
                     ]
                 ];
             }
         } else {
             // 单个包裹的情况
             $packages[] = [
-                'PackagingType' => [
-                    'Code' => '02'
+                'Packaging' => [
+                    'Code' => $data['package_type'] ?? '02'
                 ],
                 'Dimensions' => [
                     'UnitOfMeasurement' => [
                         'Code' => 'IN'
                     ],
-                    'Length' => $data['length'],
-                    'Width' => $data['width'],
-                    'Height' => $data['height']
+                    'Length' => strval(max(1, (int)$data['package']['length'])),
+                    'Width' => strval(max(1, (int)$data['package']['width'])),
+                    'Height' => strval(max(1, (int)$data['package']['height'])),
                 ],
                 'PackageWeight' => [
                     'UnitOfMeasurement' => [
                         'Code' => 'LBS'
                     ],
-                    'Weight' => $data['weight']
-                ]
+                    'Weight' => strval(number_format($data['package']['weight'], 1, '.', ''))
+                ],
+                'ReferenceNumber' => array_merge($data['reference_number']??[],[
+                    [
+                        //'BarCodeIndicator' => true, // 1 = 条形码指示符
+                        'Code' => 'EI', // 02 = 参考号码
+                        'Value' => $data['box_id'] ?? '00'
+                    ]
+                ]),
             ];
         }
 
+        $shipper = $this->getShipper($data);
+        $recipient = $this->formatAddress($formattedAddress);
         $shipment = [
             'Description' => 'Package',
-            'Shipper' => $this->formatAddress($formattedAddress['shipper']),
-            'ShipTo' => $this->formatAddress($formattedAddress['recipient']),
+            'Shipper' => $shipper,
+            'ShipTo' => $recipient,
             'PaymentInformation' => [
                 'ShipmentCharge' => [
                     [
                         'Type' => '01', // Transportation
                         'BillShipper' => [
                             'AccountNumber' => [
-                                'Value' => $data['third_party_account'] ?? $this->token->accountname
+                                'Value' => $this->carrierAccount
                             ]
                         ]
                     ],
-                    [
+                   /* [
                         'Type' => '02', // Duties and Taxes
                         'BillReceiver' => [] // 默认收货方支付清关税
-                    ]
+                    ]*/
                 ]
+            ],
+            'ShipmentRatingOptions' => [
+                'NegotiatedRatesIndicator' => 'Y'
             ],
             'Service' => [
                 'Code' => $this->mapServiceType($formattedAddress['service_type'])
             ],
+            'InvoiceLineTotal'=>($formattedAddress['address']['countryCode'] == 'CA' || $formattedAddress['address']['stateOrProvinceCode'] == 'PR')?
+            [
+                'CurrencyCode' => 'USD',
+                'MonetaryValue' => strval(number_format(($InvoiceLineTotal ?: 1), 2, '.', ''))
+            ] : null,
             'Package' => $packages
         ];
 
@@ -367,18 +561,18 @@ class UPS extends AbstractCarrier
                             'Value' => $data['third_party_account']
                         ],
                         'Address' => [
-                            'AddressLine' => $formattedAddress['shipper']['address']['streetLines'],
-                            'City' => $formattedAddress['shipper']['address']['city'],
-                            'StateProvinceCode' => $formattedAddress['shipper']['address']['stateOrProvinceCode'],
-                            'PostalCode' => $formattedAddress['shipper']['address']['postalCode'],
-                            'CountryCode' => $formattedAddress['shipper']['address']['countryCode']
+                            'AddressLine' => $data['third_party']['address']['streetLines'] ??  '',
+                            'City' => $data['third_party']['address']['city']  ??  '',
+                            'StateProvinceCode' => $data['third_party']['address']['stateOrProvinceCode'] ??  '',
+                            'PostalCode' => $data['third_party']['address']['postalCode'] ??  '',
+                            'CountryCode' => $data['third_party']['address']['countryCode'] ??  ''
                         ]
                     ]
-                ],
-                [
+                ]
+                /*[
                     'Type' => '02', // Duties and Taxes
                     'BillReceiver' => [] // 默认收货方支付清关税
-                ]
+                ]*/
             ];
         }
 
@@ -390,7 +584,7 @@ class UPS extends AbstractCarrier
                     $dutiesPayment = [
                         'BillShipper' => [
                             'AccountNumber' => [
-                                'Value' => $this->token->accountname
+                                'Value' => $this->carrierAccount
                             ]
                         ]
                     ];
@@ -403,11 +597,11 @@ class UPS extends AbstractCarrier
                                     'Value' => $data['third_party_account']
                                 ],
                                 'Address' => [
-                                    'AddressLine' => $formattedAddress['shipper']['address']['streetLines'],
-                                    'City' => $formattedAddress['shipper']['address']['city'],
-                                    'StateProvinceCode' => $formattedAddress['shipper']['address']['stateOrProvinceCode'],
-                                    'PostalCode' => $formattedAddress['shipper']['address']['postalCode'],
-                                    'CountryCode' => $formattedAddress['shipper']['address']['countryCode']
+                                    'AddressLine' => $data['third_party']['address']['streetLines'] ??  '',
+                                    'City' => $data['third_party']['address']['city']  ??  '',
+                                    'StateProvinceCode' => $data['third_party']['address']['stateOrProvinceCode'] ??  '',
+                                    'PostalCode' => $data['third_party']['address']['postalCode'] ??  '',
+                                    'CountryCode' => $data['third_party']['address']['countryCode'] ??  ''
                                 ]
                             ]
                         ];
@@ -423,32 +617,71 @@ class UPS extends AbstractCarrier
         }
 
         // 如果收件地址是住宅地址，强制使用GROUND服务
-        if ($formattedAddress['recipient']['isResidential']) {
+        if ($formattedAddress['address']['isResidential']) {
             //$shipment['Service']['Code'] = '03'; // GROUND
             // 在ShipTo中添加ResidentialIndicator字段
             $shipment['ShipTo']['ResidentialIndicator'] = 'Y';
         }
 
-        // 添加签名要求
-        if (!empty($data['signature_required'])) {
+        // 添加签名要求. 签名服务有问题。。。
+        /*if (!empty($data['signature_required'])) {
             $shipment['ShipmentServiceOptions'] = array_merge(
                 $shipment['ShipmentServiceOptions'] ?? [],
                 [
                     'DeliveryConfirmation' => [
-                        'DCISType' => $this->mapSignatureType($data['signature_type'] ?? 'DIRECT')
+                        'DCISType' => 0//$this->mapSignatureType($data['signature_type'] ?? 1)
                     ]
                 ]
             );
+        }*/
+
+        // 通知设置
+        /*
+        5 - QV In-transit Notification
+        6 - QV Ship Notification
+        7 - QV Exception Notification
+        8 - QV Delivery Notification
+        2 - Return Notification or Label Creation Notification
+        012 - Alternate Delivery Location Notification
+        013 - UAP Shipper Notification.
+        */
+        if(!empty($data['ship_notify']) && is_array($data['ship_notify']) && count($data['ship_notify']) > 0){
+            foreach($data['ship_notify'] as $key => $notify) {
+                if(!empty($notify)){
+                    $shipment['ShipmentServiceOptions']['Notification'][] = [
+                        'NotificationCode' => $notify['ship_notify_code'] ?? "6", // 默认使用6 - QV Ship Notification
+                        'EMail'=>[
+                            'EMailAddress' => $notify['ship_notify_email'] ?? '',
+                            'UndeliverableEMailAddress' => $notify['ship_notify_failed_email'] ?? 'downrag_hktkwan@hotmail.com',
+                            'FromEMailAddress' => $notify['ship_notify_from_email'] ?? '',
+                            'FromName' => $notify['ship_notify_from_name'] ?? '',
+                            'Subject' => $notify['ship_notify_subject'] ?? '',
+                            'Message' => $notify['ship_notify_message'] ?? ''
+                        ],
+                        'VoiceMessage' => [
+                            'PhoneNumber' => $notify['ship_notify_phone'] ?? ''
+                        ],
+                        'TextMessage' => [
+                            'PhoneNumber' => $notify['ship_notify_phone'] ?? ''
+                        ],
+                        'Locale' => [
+                            'Language' => $notify['ship_notify_language'] ?? 'en',
+                            'Dialect' => $notify['ship_notify_dialect'] ?? 'US'
+                        ]
+                    ];
+                }
+            }
         }
 
         // 国际订单处理：添加商业发票、形式发票、清关费由客户支付
-        if ($this->isInternationalShipment($formattedAddress['shipper']['address']['countryCode'], $formattedAddress['recipient']['address']['countryCode'])) {
-            $shipment['InternationalForms'] = [
+        if ($this->isInternationalShipment($shipper, $recipient)) {
+            $shipment['ShipmentServiceOptions']['InternationalForms'] = [
                 'FormType' => '01', // COMMERCIAL_INVOICE
-                'InvoiceNumber' => $data['InvoiceNumber'] ?? '',
-                'InvoiceDate' => $data['InvoiceDate'] ?? date('Y-m-d'),
+                'InvoiceNumber' => $data['invoice_number'] ?? '',
+                'InvoiceDate' => $data['invoice_date'] ?? date('Ymd'),
                 'ReasonForExport' => $this->mapReasonForExport($data['InvoiceReasonForExport'] ?? 'SALE'),
                 'CurrencyCode' => $this->mapCurrencyCode($data['InvoiceCurrencyCode'] ?? 'USD'),
+                'Contacts'=>['SoldTo'=>$recipient],
                 'Product' => $this->prepareUPSProducts($data),
                 'Charges' => [
                     [
@@ -462,12 +695,13 @@ class UPS extends AbstractCarrier
                 'Purpose' => 'SOLD',
                 'DocumentIndicator' => 'Y', // COMMERCIAL_INVOICE
                 'ProformaIndicator' => 'Y', // PRO_FORMA_INVOICE
+                'PaperlessDocumentIndicator' => 'Y', // 电子文档
                 'PrintCopyOfPaperlessDocumentsIndicator' => 'Y' // 打印纸质文档
             ];
 
             // 如果进口商信息与收货人不同，添加进口商信息
             if (!empty($data['importer']) && $this->isImporterDifferent($data['importer'], $formattedAddress['recipient'])) {
-                $shipment['InternationalForms']['ImporterOfRecord'] = [
+                $shipment['ShipmentServiceOptions']['InternationalForms']['ImporterOfRecord'] = [
                     'Name' => $data['importer']['contact']['personName'],
                     'Address' => [
                         'AddressLine' => $data['importer']['address']['streetLines'],
@@ -486,44 +720,22 @@ class UPS extends AbstractCarrier
             }
 
             // 清关费由客户支付
-            $shipment['ShipmentServiceOptions'] = [
+            $shipment['ShipmentServiceOptions'] = array_merge($shipment['ShipmentServiceOptions'],[
                 'InternationalDetail' => [
                     'BrokerageOption' => '02', // 02: Recipient pays duties
                 ]
-            ];
+            ]);
         }
-
-        // 添加发货通知功能
-        if (!empty($data['ship_notify']) && $data['ship_notify'] === true) {
-            $shipment['ShipmentServiceOptions']['Notification'] = [
-                'NotificationCode' => '6', // 6: Shipment Notification
-                'EMail' => [
-                    'EMailAddress' => $data['ship_notify_email'] ?? '',
-                    'UndeliverableEMailAddress' => $data['ship_notify_failed_email'] ?? 'downrag_hktkwan@hotmail.com',
-                    'FromEMailAddress' => $data['ship_notify_from_email'] ?? 'Alpharex-UPS',
-                    'FromName' => $data['ship_notify_from_name'] ?? 'Alpharex-UPS',
-                    'Subject' => $data['ship_notify_subject'] ?? 'Shipment Notification',
-                    'Message' => $data['ship_notify_message'] ?? 'Your shipment has been processed.'
-                ],
-                'VoiceMessage' => [
-                    'PhoneNumber' => $data['ship_notify_phone'] ?? ''
-                ],
-                'TextMessage' => [
-                    'PhoneNumber' => $data['ship_notify_phone'] ?? ''
-                ],
-                'Locale' => [
-                    'Language' => $data['ship_notify_language'] ?? 'en',
-                    'Dialect' => $data['ship_notify_dialect'] ?? 'US'
-                ]
-            ];
-        }
-
+//print_r($shipment);exit;
         return [
             'ShipmentRequest' => [
+                'Request' => [
+                    'RequestOption' => 'validate'
+                ],
                 'Shipment' => $shipment,
                 'LabelSpecification' => [
                     'LabelImageFormat' => [
-                        'Code' => 'PDF'
+                        'Code' => 'GIF'
                     ],
                     'LabelStockSize' => [
                         'Height' => '6',
@@ -534,13 +746,28 @@ class UPS extends AbstractCarrier
         ];
     }
 
+    private function getShipper($data){
+        // 获取默认发件人信息
+        $defaultShipper = config('shipping.default_shipper');
+        
+        // 合并默认发件人信息和传入的数据
+        $shipper = array_merge($defaultShipper, $data['shipper'] ?? []);
+        
+        $shipper = $this->formatAddressToUps($shipper);
+        $shipper['ShipperNumber'] = $this->carrierAccount; // 添加账户号码
+        return $shipper;
+    }
+
     private function prepareRateData(array $data): array
     {
         if (!$this->token) {
             throw new \Exception('UPS account not set');
         }
 
-        $formattedAddress = $this->addressFormatter->format($data, $data['service_type']);
+        $data['service_type'] = isset($data['service_type'])?:null;
+
+        $formattedAddress = $this->addressFormatter->format($data['recipient'], $data['service_type']);
+        //$serviceType = $this->mapServiceType($formattedAddress['service_type']);
 
         // 处理包裹数据
         $packages = [];
@@ -555,15 +782,15 @@ class UPS extends AbstractCarrier
                         'UnitOfMeasurement' => [
                             'Code' => 'IN'
                         ],
-                        'Length' => $package['length'],
-                        'Width' => $package['width'],
-                        'Height' => $package['height']
+                        'Length' => strval(max(1, (int)$package['length'])),
+                        'Width' => strval(max(1, (int)$package['width'])),
+                        'Height' => strval(max(1, (int)$package['height']))
                     ],
                     'PackageWeight' => [
                         'UnitOfMeasurement' => [
                             'Code' => 'LBS'
                         ],
-                        'Weight' => $package['weight']
+                        'Weight' => strval(number_format($package['weight'], 1, '.', ''))
                     ]
                 ];
             }
@@ -577,45 +804,58 @@ class UPS extends AbstractCarrier
                     'UnitOfMeasurement' => [
                         'Code' => 'IN'
                     ],
-                    'Length' => $data['length'],
-                    'Width' => $data['width'],
-                    'Height' => $data['height']
+                    'Length' => strval(max(1, (int)$data['package']['length'])),
+                    'Width' => strval(max(1, (int)$data['package']['width'])),
+                    'Height' => strval(max(1, (int)$data['package']['height'])),
                 ],
                 'PackageWeight' => [
                     'UnitOfMeasurement' => [
                         'Code' => 'LBS'
                     ],
-                    'Weight' => $data['weight']
+                    'Weight' => strval(number_format($data['package']['weight'], 1, '.', ''))
                 ]
             ];
         }
-
-        $shipment = [
-            'Shipper' => $this->formatAddress($formattedAddress['shipper']),
-            'ShipTo' => $this->formatAddress($formattedAddress['recipient']),
-            'ShipFrom' => $this->formatAddress($formattedAddress['shipper']),
-            'Service' => [
-                'Code' => $this->mapServiceType($formattedAddress['service_type'])
-            ],
-            'Package' => $packages
-        ];
 
         // 添加签名要求
         if (!empty($data['signature_required'])) {
-            $shipment['ShipmentServiceOptions'] = [
+            /*$shipment['ShipmentServiceOptions'] = [
                 'DeliveryConfirmation' => [
                     'DCISType' => $this->mapSignatureType($data['signature_type'] ?? 'DIRECT')
                 ]
-            ];
+            ];*/
+            $DCISType = $this->mapSignatureType($data['signature_type'] ?? "1");
+            foreach($packages as $key=>$p){
+                $packages[$key]['PackageServiceOptions'] = [
+                    'DeliveryConfirmation' => [
+                        'DCISType' => $DCISType
+                    ]
+                ];
+            }
         }
 
+        $shipper = $this->getShipper($data);
+        $recipient = $this->formatAddress($formattedAddress);
+        $shipment = [
+            'Shipper' => $shipper,
+            'ShipTo' => $recipient,
+            'ShipFrom' => $shipper,
+            'Service' => [
+                'Code' => $this->mapServiceType($formattedAddress['service_type'])
+            ],
+            'Package' => $packages,
+            'ShipmentRatingOptions' => [
+                'NegotiatedRatesIndicator' => 'Y'
+            ],
+        ];
+
         // 如果收件地址是住宅地址，添加住宅地址标识
-        if ($formattedAddress['recipient']['isResidential']) {
-            $shipment['ShipTo']['ResidentialIndicator'] = 'Y';
+        if ($formattedAddress['address']['isResidential']) {
+            $shipment['ShipTo']['address']['ResidentialAddressIndicator'] = 'Y';
         }
 
         // 国际订单处理
-        if ($this->isInternationalShipment($formattedAddress['shipper']['address']['countryCode'], $formattedAddress['recipient']['address']['countryCode'])) {
+        if ($this->isInternationalShipment($shipper, $recipient)) {
             $shipment['ShipmentServiceOptions'] = array_merge(
                 $shipment['ShipmentServiceOptions'] ?? [],
                 [
@@ -648,12 +888,18 @@ class UPS extends AbstractCarrier
 
         $rateRequest = [
             'RateRequest' => [
+                "Request" => [
+                    "TransactionReference" => [
+                        "CustomerContext" => "CustomerContext",
+                        "TransactionIdentifier" => "TransactionIdentifier"
+                    ]
+                ],
                 'Shipment' => $shipment
             ]
         ];
 
         // 添加账户信息
-        $rateRequest['RateRequest']['Shipment']['Shipper']['ShipperNumber'] = $this->token->accountname;
+        $rateRequest['RateRequest']['Shipment']['Shipper']['ShipperNumber'] = $this->carrierAccount;
 
         // 如果配置了使用协商费率，添加相关设置
         if (config('shipping.carriers.ups.use_negotiated_rates', true)) {
@@ -661,14 +907,17 @@ class UPS extends AbstractCarrier
                 'NegotiatedRatesIndicator' => 'Y'
             ];
         }
-
+//print_r($rateRequest);exit;
         return $rateRequest;
     }
 
-    private function formatAddress(array $address): array
-    {
-        return [
-            'Name' => $address['contact']['personName'],
+    private function formatAddressToUps($address){
+        $upsAddress = [
+            'Name' => $address['contact']['personName'] ?? '',
+            'AttentionName' => $address['contact']['attentionName'] ?? 'ShipDept',
+            'CompanyDisplayableName' => $address['contact']['companyName'] ?? '',
+            'Phone' => ['Number'=>$address['contact']['phoneNumber'] ?? ''],
+            'EMailAddress' => $address['contact']['emailAddress'] ?? '',
             'Address' => [
                 'AddressLine' => $address['address']['streetLines'],
                 'City' => $address['address']['city'],
@@ -676,11 +925,137 @@ class UPS extends AbstractCarrier
                 'PostalCode' => $address['address']['postalCode'],
                 'CountryCode' => $address['address']['countryCode']
             ],
-            'Phone' => [
-                'Number' => $address['contact']['phoneNumber']
+        ];
+
+        return $upsAddress;
+    }
+
+    private function formatAddress(array $address): array
+    {
+        $phoneDigitArray = $this->formatPhoneForUpsApi(($address['contact']['phoneNumber'] ?? ''), $address['address']['countryCode'] ?? 'US');
+        $phone['Number'] = $phoneDigitArray['ups_api_format']['PhoneNumber'];
+        // 如果有分机号，UPS API 不支持分机号，暂时忽略
+        if(!empty($phoneDigitArray['ups_api_format']['Extension'])){
+            $phone['Extension'] = substr($phoneDigitArray['ups_api_format']['Extension'],0,4);
+            /*if(strlen($phone['Extension']) > 4){
+                if(strlen($phone['Number']) + strlen($phone['Extension']) <= 14){
+                    $phone['Number'] .= 'x'.$phone['Extension'];
+                }
+                unset($phone['Extension']);
+            }*/
+        }
+
+        return [
+            'Name' => $address['contact']['companyName']??$address['contact']['personName'],
+            'AttentionName' => ($address['address']['countryCode']!='US' && !$address['address']['isResidential']) ? $address['contact']['personName']:'',
+            'Address' => [
+                'AddressLine' => $address['address']['streetLines'],
+                'City' => $address['address']['city'],
+                'StateProvinceCode' => (in_array($address['address']['countryCode'],['US','CA'])) ? $address['address']['stateOrProvinceCode'] : ($address['address']['countryCode'] == 'IE' ? 'IE' : null),
+                'PostalCode' => $address['address']['postalCode'],
+                'CountryCode' => $address['address']['countryCode']
             ],
+            'Phone' => $phone,
             'EMailAddress' => $address['contact']['emailAddress'],
-            'ResidentialIndicator' => $address['isResidential'] ? 'Y' : 'N'
+            'ResidentialIndicator' => ($address['address']['isResidential']??false) ? 'Y' : 'N'
+        ];
+    }
+
+    /**
+     * 格式化电话号码以支持UPS API，支持多种分机号格式
+     * @param string $phone 原始电话号码字符串
+     * @return array 格式化后的电话号码信息
+     */
+    function formatPhoneForUpsApi($phone, $countryCode = 'US') {
+        // ISO 国家代码映射到国际区号
+        $countryDialCodes = [
+            'US' => '+1',
+            'CA' => '+1',
+            'CN' => '+86',
+            'HK' => '+852',
+            'TW' => '+886',
+            'KR' => '+82',
+            'JP' => '+81',
+            'GB' => '+44',
+            'DE' => '+49',
+            'FR' => '+33',
+            'ES' => '+34',
+            'IT' => '+39',
+            'IN' => '+91',
+            'AU' => '+61',
+            'MY' => '+60',
+            'SG' => '+65',
+            'BR' => '+55',
+            // ... 可根据需要扩展
+        ];
+
+        // 确定目标国家的区号
+        $targetDialCode = $countryDialCodes[strtoupper($countryCode)] ?? '+1';
+
+        // 提取分机号
+        $extension = null;
+        $extensionPatterns = [
+            '/ext\.?\s*(\d+)/i',
+            '/x\.?\s*(\d+)/i',
+            '/#\s*(\d+)/',
+            '/extension\s*(\d+)/i',
+            '/extn\.?\s*(\d+)/i',
+            '/分机\s*(\d+)/u',
+            '/分機\s*(\d+)/u',
+            '/ext\s*(\d+)/i',
+            '/x\s*(\d+)/i',
+            '/#(\d+)/',
+        ];
+        foreach ($extensionPatterns as $pattern) {
+            if (preg_match($pattern, $phone, $matches)) {
+                $extension = $matches[1];
+                $phone = preg_replace($pattern, '', $phone);
+                break;
+            }
+        }
+
+        // 去掉空格和特殊字符
+        $phone = preg_replace('/[^\d\+]/', '', $phone);
+
+        // 如果号码带了+开头，去掉并验证是否匹配目标区号
+        if (strpos($phone, '+') === 0) {
+            foreach ($countryDialCodes as $iso => $dial) {
+                if (strpos($phone, $dial) === 0) {
+                    $phone = substr($phone, strlen($dial)); // 去掉已有区号
+                    break;
+                }
+            }
+        }
+
+        // 最终号码（仅数字）
+        $phoneNumber = preg_replace('/\D/', '', $phone);
+
+        // 美国/加拿大特殊处理：10位数或11位以1开头
+        if (in_array($countryCode, ['US','CA'])) {
+            if (strlen($phoneNumber) == 10) {
+                $formattedPhone = '(' . substr($phoneNumber, 0, 3) . ') ' .
+                                substr($phoneNumber, 3, 3) . '-' .
+                                substr($phoneNumber, 6, 4);
+            } elseif (strlen($phoneNumber) == 11 && $phoneNumber[0] == '1') {
+                $formattedPhone = '1-' . substr($phoneNumber, 1, 3) . '-' .
+                                substr($phoneNumber, 4, 3) . '-' .
+                                substr($phoneNumber, 7, 4);
+            } else {
+                $formattedPhone = $phoneNumber;
+            }
+        } else {
+            $formattedPhone = $phoneNumber;
+        }
+
+        return [
+            'country_code' => $targetDialCode,
+            'phone_number' => $formattedPhone,
+            'extension' => $extension,
+            'raw_input' => $phone,
+            'ups_api_format' => [
+                'PhoneNumber' => $formattedPhone,
+                'Extension' => $extension ?: null
+            ]
         ];
     }
 
@@ -698,8 +1073,13 @@ class UPS extends AbstractCarrier
             return '11'; // Standard
         }
 
+        /*if (($serviceType === 'STANDARD' || $serviceType === '' || $serviceType === 'GROUND' || $serviceType === 'WORLDWIDE_SAVER') && 
+            ($recipientCountry != 'CA' && $recipientCountry != 'MX' && $recipientCountry != 'US')) {
+            return '08'; // Worldwide Expedited
+        }*/
+
         if (($serviceType === 'STANDARD' || $serviceType === '' || $serviceType === 'GROUND' || $serviceType === 'WORLDWIDE_SAVER') && 
-            ($recipientCountry !== 'CA' && $recipientCountry !== 'MX' && $recipientCountry !== 'US')) {
+            ($recipientCountry != 'CA' && $recipientCountry != 'MX' && $recipientCountry != 'US')) {
             return '08'; // Worldwide Expedited
         }
 
@@ -726,7 +1106,63 @@ class UPS extends AbstractCarrier
             'SAVER' => '13'                  // Saver
         ];
 
+        /*01 = Next Day Air
+        02 = 2nd Day Air
+        03 = Ground
+        07 = Express
+        08 = Expedited
+        11 = UPS Standard
+        12 = 3 Day Select
+        13 = Next Day Air Saver
+        14 = UPS Next Day Air® Early
+        17 = UPS Worldwide Economy DDU
+        54 = Express Plus
+        59 = 2nd Day Air A.M.
+        65 = UPS Saver
+        M2 = First Class Mail
+        M3 = Priority Mail
+        M4 = Expedited MaiI Innovations
+        M5 = Priority Mail Innovations
+        M6 = Economy Mail Innovations
+        M7 = MaiI Innovations (MI) Returns
+        70 = UPS Access Point™ Economy
+        71 = UPS Worldwide Express Freight Midday
+        72 = UPS Worldwide Economy DDP
+        74 = UPS Express®12:00
+        75 = UPS Heavy Goods
+        82 = UPS Today Standard
+        83 = UPS Today Dedicated Courier
+        84 = UPS Today Intercity
+        85 = UPS Today Express
+        86 = UPS Today Express Saver
+        93 = Ground Saver
+        96 = UPS Worldwide Express Freight.
+        C6 = Roadie XD AM (Morning delivery)
+        C7 = Roadie XD PM (Afternoon delivery)
+        C8 = Roadie XD (Anytime delivery)
+        T0 = Master
+        T1 = LTL*/
+
         return $mapping[$serviceType] ?? '03'; // 默认返回 Ground
+    }
+
+    public function mapUPSServiceType(string $serviceCode){
+        $services = [
+            '01' => 'UPS Next Day Air',
+            '02' => 'UPS 2nd Day Air',
+            '03' => 'UPS Ground',
+            '07' => 'UPS Worldwide Express',
+            '08' => 'UPS Worldwide Expedited',
+            '11' => 'UPS Standard',
+            '12' => 'UPS 3 Day Select',
+            '13' => 'UPS Next Day Air Saver',
+            '14' => 'UPS Next Day Air Early',
+            '54' => 'UPS Worldwide Express Plus',
+            '59' => 'UPS 2nd Day Air A.M.',
+            '65' => 'UPS Worldwide Saver',
+        ];
+
+        return $services[$serviceCode] ?? 'Unknown Service';
     }
 
     private function normalizeServiceType(string $serviceType): string
@@ -773,9 +1209,9 @@ class UPS extends AbstractCarrier
         return $serviceType;
     }
 
-    private function isInternationalShipment(string $shipperCountry, string $recipientCountry): bool
+    private function isInternationalShipment($shipper, $recipient): bool
     {
-        return $shipperCountry !== $recipientCountry;
+        return $shipper['Address']['CountryCode'] !== $recipient['Address']['CountryCode'];
     }
 
     private function prepareUPSProducts(array $data): array
@@ -784,43 +1220,24 @@ class UPS extends AbstractCarrier
         if (isset($data['items']) && is_array($data['items'])) {
             foreach ($data['items'] as $item) {
                 $products[] = [
-                    'Description' => $item['description'] ?? '',
-                    'CommodityCode' => $item['harmonizedCode'] ?? '',
-                    'OriginCountryCode' => $item['countryOfManufacture'] ?? $data['shipper']['address']['countryCode'] ?? 'US',
+                    'Description' => $item['description'] ?: 'Auto Parts',
+                    'CommodityCode' => $item['harmonizedCode'] ?: '',
+                    'OriginCountryCode' => $item['countryOfManufacture'] ?: 'CN',
                     'Unit' => [
-                        'Number' => $item['quantity'] ?? 1,
-                        'Value' => $item['unitPrice'] ?? 0,
+                        'Number' => $item['quantity'] ?? "1",
+                        'Value' => $item['unitPrice'] ?? "1",
                         'UnitOfMeasurement' => [
-                            'Code' => 'PCS'
+                            'Code' => $item['UnitOfMeasurement'] ?: "PCS",
                         ]
                     ],
-                    'ProductWeight' => [
+                    /*'ProductWeight' => [
                         'UnitOfMeasurement' => [
                             'Code' => 'LBS'
                         ],
                         'Weight' => $item['weight'] ?? 0
-                    ]
+                    ]*/
                 ];
             }
-        } else {
-            $products[] = [
-                'Description' => $data['description'] ?? 'General Merchandise',
-                'CommodityCode' => $data['harmonizedCode'] ?? '',
-                'OriginCountryCode' => $data['countryOfManufacture'] ?? $data['shipper']['address']['countryCode'] ?? 'US',
-                'Unit' => [
-                    'Number' => 1,
-                    'Value' => $data['customsValue'] ?? 0,
-                    'UnitOfMeasurement' => [
-                        'Code' => 'PCS'
-                    ]
-                ],
-                'ProductWeight' => [
-                    'UnitOfMeasurement' => [
-                        'Code' => 'LBS'
-                    ],
-                    'Weight' => $data['weight'] ?? 0
-                ]
-            ];
         }
         return $products;
     }
@@ -828,17 +1245,17 @@ class UPS extends AbstractCarrier
     private function mapSignatureType(string $type): string
     {
         $mapping = [
-            'DIRECT' => '01', // 直接签名
-            'INDIRECT' => '02', // 间接签名
-            'ADULT' => '03', // 成人签名
-            'SIGNATURE_REQUIRED' => '01', // 需要签名
-            'SIGNATURE_NOT_REQUIRED' => '00', // 不需要签名
-            'NO_SIGNATURE_REQUIRED' => '00', // 不需要签名
-            'SIGNATURE_REQUIRED_INDIRECT' => '02', // 间接签名
-            'SIGNATURE_REQUIRED_ADULT' => '03', // 成人签名
+            'DIRECT' => 2, // 直接签名
+            'INDIRECT' => 2, // 间接签名
+            'ADULT' => 3, // 成人签名
+            'SIGNATURE_REQUIRED' => 2, // 需要签名
+            'SIGNATURE_NOT_REQUIRED' => 1, // 不需要签名
+            'NO_SIGNATURE_REQUIRED' => 1, // 不需要签名
+            'SIGNATURE_REQUIRED_INDIRECT' => 2, // 间接签名
+            'SIGNATURE_REQUIRED_ADULT' => 3, // 成人签名
         ];
 
-        return $mapping[$type] ?? '01'; // 默认需要直接签名
+        return $mapping[$type] ?? 1; // 默认不需要直接签名
     }
 
     private function isImporterDifferent(array $importer, array $recipient): bool
@@ -898,17 +1315,17 @@ class UPS extends AbstractCarrier
         return $mapping[strtoupper($currency)] ?? 'USD'; // 默认返回 USD
     }
 
-    private function saveLabelInfo(array $data, array $response): void
+    private function saveLabelInfo(array $data, array $response)
     {
         // 从响应中提取跟踪号码
         $trackingNumber = $response['ShipmentResponse']['ShipmentResults']['ShipmentIdentificationNumber'] ?? null;
         
         if (!$trackingNumber) {
-            return;
+            return [];
         }
 
         // 从响应中提取标签URL
-        $labelUrl = $response['ShipmentResponse']['ShipmentResults']['PackageResults']['ShippingLabel']['GraphicImage'] ?? null;
+        //$labelUrl = $response['ShipmentResponse']['ShipmentResults']['PackageResults']['ShippingLabel']['GraphicImage'] ?? null;
 
         // 从响应中提取运费
         $shippingCost = $response['ShipmentResponse']['ShipmentResults']['ShipmentCharges']['TotalCharges']['MonetaryValue'] ?? null;
@@ -922,34 +1339,120 @@ class UPS extends AbstractCarrier
                 'weight' => $data['weight'] ?? null,
                 'length' => $data['length'] ?? null,
                 'width' => $data['width'] ?? null,
-                'height' => $data['height'] ?? null
+                'height' => $data['height'] ?? null,
+                'box_id' => $data['box_id'] ?? null
             ];
         }
 
-        // 创建标签记录
-        ShippingLabel::create([
-            'carrier' => 'ups',
-            'account_number' => $this->token->accountname,
-            'tracking_number' => $trackingNumber,
-            'invoice_number' => $data['InvoiceNumber'] ?? null,
-            'service_type' => $data['service_type'] ?? null,
-            'shipping_cost' => $shippingCost,
-            'label_url' => $labelUrl,
-            'label_data' => $response,
-            'shipper_info' => [
-                'name' => $data['shipper']['name'] ?? null,
-                'address' => $data['shipper']['address'] ?? null,
-                'phone' => $data['shipper']['phone'] ?? null,
-                'email' => $data['shipper']['email'] ?? null
-            ],
-            'recipient_info' => [
-                'name' => $data['recipient']['name'] ?? null,
-                'address' => $data['recipient']['address'] ?? null,
-                'phone' => $data['recipient']['phone'] ?? null,
-                'email' => $data['recipient']['email'] ?? null
-            ],
-            'package_info' => $packageInfo,
-            'status' => 'ACTIVE'
-        ]);
+        $labelModel = config('shipping.database.models.shipping_label');
+
+        if(isset($response['ShipmentResponse']['ShipmentResults']['Form'])) {
+            $formdata = $response['ShipmentResponse']['ShipmentResults']['Form'];
+        }
+
+        //获取运费
+                $shippingCost = isset($response['ShipmentResponse']['ShipmentResults']['NegotiatedRateCharges'])?
+                    ($response['ShipmentResponse']['ShipmentResults']['NegotiatedRateCharges']['TotalCharge']['MonetaryValue'] ?? 0)
+                    :($response['ShipmentResponse']['ShipmentResults']['ShipmentCharges']['TotalCharges']['MonetaryValue'] ?? 0);
+
+                
+                $shipmentItemizedCharges = isset($response['ShipmentResponse']['ShipmentResults']['NegotiatedRateCharges']['ItemizedCharges'])?
+                                            $response['ShipmentResponse']['ShipmentResults']['NegotiatedRateCharges']['ItemizedCharges']
+                                            :$response['ShipmentResponse']['ShipmentResults']['ShipmentCharges']['ItemizedCharges'] ?? [];
+
+                $shipmentfees = [];
+                foreach($shipmentItemizedCharges as $itemizedcharge) {
+                    $shipmentfee = $itemizedcharge['MonetaryValue'] ?? 0;
+                    $shipmentfeeCode = $itemizedcharge['Code'] ?? '';
+                    $shipmentfees[$shipmentfeeCode] = $shipmentfee;
+                }
+
+        $rs = [];
+        foreach($packageInfo as $i=>$package) {
+            $labelUrl = $response['ShipmentResponse']['ShipmentResults']['PackageResults'][$i]['ShippingLabel']['GraphicImage'] ?? '';
+            $imageFormat = $response['ShipmentResponse']['ShipmentResults']['PackageResults'][$i]['ShippingLabel']['ImageFormat']['Code'] ?? '';
+            $trackingNumber = $response['ShipmentResponse']['ShipmentResults']['PackageResults'][$i]['TrackingNumber'] ?? '';
+
+            if($i>0){
+                $shippingCost = 0; // 如果有多个包裹，使用第一个包裹的运费
+                $shipmentfees = [];
+            }
+
+            $packageItemizedCharges = isset($response['ShipmentResponse']['ShipmentResults']['PackageResults'][$i]['NegotiatedCharges']['ItemizedCharges'])?
+                                            $response['ShipmentResponse']['ShipmentResults']['PackageResults'][$i]['NegotiatedCharges']['ItemizedCharges']
+                                            :$response['ShipmentResponse']['ShipmentResults']['PackageResults'][$i]['ItemizedCharges'] ?? [];
+
+            $packagefees = [];
+            $package_ahs = 0;
+            foreach($packageItemizedCharges as $itemizedcharge) {
+                $packagefee = $itemizedcharge['MonetaryValue'] ?? 0;
+                $packagefeeCode = $itemizedcharge['Code'] ?? '';
+                $packagefees[$packagefeeCode] = $packagefee;
+
+                if($packagefeeCode == '100'){
+                    $package_ahs = $packagefee;
+                }
+            }
+
+
+            /*$shippingCost = $response['ShipmentResponse']['ShipmentResults']['PackageResults'][$i]['BaseServiceCharge']['MonetaryValue'] ?? 0;
+            $shippingCost += $response['ShipmentResponse']['ShipmentResults']['PackageResults'][$i]['ServiceOptionsCharges']['MonetaryValue'] ?? 0;
+
+            $itemizedcharges = $response['ShipmentResponse']['ShipmentResults']['PackageResults'][$i]['ItemizedCharges'] ?? [];
+            foreach($itemizedcharges as $itemizedcharge) {
+                $shippingCost += $itemizedcharge['MonetaryValue'] ?? 0;
+            }
+
+            if($shippingCost == 0){
+                $shippingCost = isset($response['ShipmentResponse']['ShipmentResults']['NegotiatedRateCharges'])?
+                ($response['ShipmentResponse']['ShipmentResults']['NegotiatedRateCharges']['TotalCharge']['MonetaryValue'] ?? 0)
+                :($response['ShipmentResponse']['ShipmentResults']['ShipmentCharges']['TotalCharges']['MonetaryValue'] ?? 0);
+
+                if($i>0)$shippingCost = 0; // 如果有多个包裹，使用第一个包裹的运费
+            }*/
+
+            $markup = 1.0 + $this->markup;
+
+            $rs[] = [
+                'carrier' => 'ups',
+                'account_name' => $this->accountName,
+                'account_number' => $this->carrierAccount,
+                'tracking_number' => $trackingNumber,
+                'invoice_number' => $data['invoice_number'] ?? null,
+                'market_order_id' => $data['market_order_id'] ?? null,
+                "customer_po_number" => $data['customer_po_number'] ?? null,
+                "box_id" => $package['box_id'] ?? 0,
+                'service_type' => $data['service_type'] ?? null,
+                'shipping_cost' => $shippingCost * $markup,
+                'shipping_cost_base' => $shippingCost,
+                'label_url' => $labelUrl,
+                'image_format' => $imageFormat,
+                'label_data' => '',//$response,
+                'shipper_info' => [
+                    'name' => $data['shipper']['name'] ?? null,
+                    'address' => $data['shipper']['address'] ?? null,
+                    'phone' => $data['shipper']['phone'] ?? null,
+                    'email' => $data['shipper']['email'] ?? null
+                ],
+                'recipient_info' => [
+                    'name' => $data['recipient']['name'] ?? null,
+                    'address' => $data['recipient']['address'] ?? null,
+                    'phone' => $data['recipient']['phone'] ?? null,
+                    'email' => $data['recipient']['email'] ?? null
+                ],
+                'package_info' => $package,
+                'formdata' => isset($formdata) ? $formdata : [],
+                'status' => 'ACTIVE',
+                'shipmentfees' => $shipmentfees,
+                'packagefees' => $packagefees,
+                'package_ahs' => $package_ahs
+            ];
+       
+            // 创建标签记录
+            $labelModel::create($rs[$i]);
+        }
+
+        //return $response;
+        return $rs;
     }
 } 

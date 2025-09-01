@@ -8,9 +8,9 @@ use Exception;
 
 class RateComparison
 {
-    protected array $carriers = [];
-    protected array $rates = [];
-    protected array $cheapestRates = [];
+    protected $carriers = [];
+    protected $rates = [];
+    protected $cheapestRates = [];
 
     public function __construct(array $carriers = [])
     {
@@ -32,30 +32,31 @@ class RateComparison
         // 初始化指定的承运商
         foreach ($carriers as $carrierKey => $carrierConfig) {
             $carrierName = strtolower($carrierKey);
+            //去除carrierName后面的_1,_2等
+            $carrierName = preg_replace('/_\d+$/', '', $carrierName);
+
             switch ($carrierName) {
                 case 'fedex':
                     $carrier = new FedEx();
-                    if (isset($carrierConfig['name'])) {
-                        $carrier->setAccount($carrierConfig['name']);
-                    }
-                    if (isset($carrierConfig['account_number'])) {
-                        $carrier->setCarrierAccount($carrierConfig['account_number']);
-                    }
-                    $this->carriers[] = $carrier;
                     break;
                 case 'ups':
                     $carrier = new UPS();
-                    if (isset($carrierConfig['name'])) {
-                        $carrier->setAccount($carrierConfig['name']);
-                    }
-                    if (isset($carrierConfig['account_number'])) {
-                        $carrier->setCarrierAccount($carrierConfig['account_number']);
-                    }
-                    $this->carriers[] = $carrier;
+                    
                     break;
                 default:
                     throw new Exception("Unsupported carrier: {$carrierKey}");
             }
+
+            if (isset($carrierConfig['name'])) {
+                $carrier->setAccount($carrierConfig['name']);
+            }
+            if (isset($carrierConfig['account_number'])) {
+                $carrier->setCarrierAccount($carrierConfig['account_number']);
+            }
+            if(isset($carrierConfig['makeup'])) {
+                $carrier->setMarkup($carrierConfig['makeup']);
+            }
+            $this->carriers[] = $carrier;
         }
     }
 
@@ -71,16 +72,16 @@ class RateComparison
 
         // 获取每个承运商的费率
         foreach ($this->carriers as $carrier) {
-            try {
+           // try {
                 // 获取费率
                 $rates = $carrier->getRates($data);
-                $this->processCarrierRates($carrier->getName(), $rates);
-            } catch (Exception $e) {
+                $this->processCarrierRates($carrier, $rates);
+           /* } catch (Exception $e) {
                 // 记录错误但继续处理其他承运商
                 $this->rates[$carrier->getName()] = [
                     'error' => $e->getMessage()
                 ];
-            }
+            }*/
         }
 
         // 找出每个服务类型的最便宜选项
@@ -92,25 +93,28 @@ class RateComparison
         ];
     }
 
-    protected function processCarrierRates(string $carrier, array $rates): void
+    protected function processCarrierRates($carrier, array $rates): void
     {
+        $carriername = $carrier->getCarrierName();
+        $name = $carrier->getName();
         $processedRates = [];
 
-        switch ($carrier) {
+        switch ($carriername) {
             case 'fedex':
-                $processedRates = $this->processFedExRates($rates);
+                $processedRates = $this->processFedExRates($rates,$carrier);
                 break;
             case 'ups':
-                $processedRates = $this->processUPSRates($rates);
+                $processedRates = $this->processUPSRates($rates,$carrier);
                 break;
         }
 
-        $this->rates[$carrier] = $processedRates;
+        $this->rates[$name] = $processedRates;
     }
 
-    protected function processFedExRates(array $rates): array
+    protected function processFedExRates(array $rates,$carrier): array
     {
         $processedRates = [];
+        $markup = 1.0 + $carrier->getMarkup();
 
         if (isset($rates['output']['rateReplyDetails'])) {
             foreach ($rates['output']['rateReplyDetails'] as $rate) {
@@ -121,7 +125,8 @@ class RateComparison
                 $processedRates[$serviceType] = [
                     'carrier' => 'fedex',
                     'service_type' => $serviceType,
-                    'total_charge' => $totalCharge,
+                    'total_charge' => $totalCharge * $markup,
+                    'base_charge' => $totalCharge,
                     'currency' => $currency,
                     'delivery_time' => $rate['deliveryDate'] ?? null,
                     'transit_time' => $rate['transitTime'] ?? null
@@ -132,38 +137,42 @@ class RateComparison
         return $processedRates;
     }
 
-    private function processUPSRates(array $rates): array
-    {
+    private function processUPSRates(array $rates,$carrier): array
+    { 
         $processedRates = [];
+        $markup = 1.0 + $carrier->getMarkup();
+        //print_r($rates);
+        $rates = $rates['RateResponse']['RatedShipment'] ?? [];
         foreach ($rates as $rate) {
             $serviceType = $rate['Service']['Code'] ?? '';
-            $serviceName = $this->mapUPSServiceType($serviceType);
+            $serviceName = $carrier->mapUPSServiceType($serviceType);
             
             // 检查是否有协商费率
-            $hasNegotiatedRate = isset($rate['NegotiatedRates']) && !empty($rate['NegotiatedRates']);
+            $hasNegotiatedRate = isset($rate['NegotiatedRateCharges']) && !empty($rate['NegotiatedRateCharges']);
             
             // 获取费率信息
             if ($hasNegotiatedRate) {
-                $totalCharge = $rate['NegotiatedRates'][0]['TotalCharge']['MonetaryValue'] ?? 0;
-                $currency = $rate['NegotiatedRates'][0]['TotalCharge']['CurrencyCode'] ?? 'USD';
+                $totalCharge = $rate['NegotiatedRateCharges']['TotalCharge']['MonetaryValue'] ?? 0;
+                $currency = $rate['NegotiatedRateCharges']['TotalCharge']['CurrencyCode'] ?? 'USD';
             } else {
-                $totalCharge = $rate['TotalCharge']['MonetaryValue'] ?? 0;
-                $currency = $rate['TotalCharge']['CurrencyCode'] ?? 'USD';
+                $totalCharge = $rate['TotalCharges']['MonetaryValue'] ?? 0;
+                $currency = $rate['TotalCharges']['CurrencyCode'] ?? 'USD';
             }
 
             $processedRates[] = [
                 'carrier' => 'UPS',
                 'service_type' => $serviceName,
                 'service_code' => $serviceType,
-                'total_charge' => (float) $totalCharge,
+                'total_charge' => ((float) $totalCharge) * $markup,
+                'base_charge' => (float) $totalCharge,
                 'currency' => $currency,
                 'delivery_time' => $rate['GuaranteedDaysToDelivery'] ?? null,
                 'transit_time' => $rate['TransitTime'] ?? null,
                 'is_negotiated_rate' => $hasNegotiatedRate,
                 'rate_details' => [
-                    'base_charge' => $rate['BaseCharge']['MonetaryValue'] ?? 0,
+                    'base_charge' => $rate['BaseServiceCharge']['MonetaryValue'] ?? 0,
                     'service_options_charges' => $rate['ServiceOptionsCharges']['MonetaryValue'] ?? 0,
-                    'total_surcharges' => $rate['TotalSurcharges']['MonetaryValue'] ?? 0,
+                    //'total_surcharges' => $rate['TotalSurcharges']['MonetaryValue'] ?? 0,
                     'negotiated_rate' => $hasNegotiatedRate ? $totalCharge : null
                 ]
             ];
@@ -197,6 +206,7 @@ class RateComparison
 
                 $rate = $carrierRates[$serviceType];
                 if ($cheapestRate === null || $rate['total_charge'] < $cheapestRate['total_charge']) {
+                    $rate['name'] = $carrier; // 添加承运商信息
                     $cheapestRate = $rate;
                     $cheapestCarrier = $carrier;
                 }

@@ -11,12 +11,14 @@ class ShippingLabel extends Model
 
     protected $fillable = [
         'carrier',
+        'account_name',
         'account_number',
         'tracking_number',
         'invoice_number',
         'service_type',
         'shipping_cost',
         'label_url',
+        'image_format',
         'label_data',
         'shipper_info',
         'recipient_info',
