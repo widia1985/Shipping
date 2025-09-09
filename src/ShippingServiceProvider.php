@@ -17,13 +17,19 @@ class ShippingServiceProvider extends ServiceProvider
     public function boot()
     {
         $this->publishes([
-            __DIR__.'/config/shipping.php' => config_path('shipping.php'),
+            __DIR__ . '/config/shipping.php' => config_path('shipping.php'),
+            __DIR__ . '/config/serviceTypes.php' => config_path('serviceTypes.php'),
         ], 'config');
 
         $this->mergeConfigFrom(
-            __DIR__.'/config/shipping.php', 'shipping'
+            __DIR__ . '/config/shipping.php',
+            'shipping'
+        );
+        $this->mergeConfigFrom(
+            __DIR__ . '/config/serviceTypes.php',
+            'serviceTypes'
         );
 
-        $this->loadRoutesFrom(__DIR__.'/../routes/api.php');
+        $this->loadRoutesFrom(__DIR__ . '/../routes/api.php');
     }
-} 
+}

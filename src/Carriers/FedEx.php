@@ -43,7 +43,7 @@ class FedEx extends AbstractCarrier
     public function setMarkup(float $markup): void
     {
         $this->markup = $markup;
-    } 
+    }
 
     public function getMarkup(): float
     {
@@ -109,7 +109,7 @@ class FedEx extends AbstractCarrier
         return [
             'Authorization' => 'Bearer ' . $this->getAccessToken(),
             'Content-Type' => 'application/json',
-            //'X-locale' => 'en_US',
+            // 'X-locale' => 'en_US',
         ];
     }
 
@@ -127,10 +127,10 @@ class FedEx extends AbstractCarrier
         try {
             $application = $this->token->application()->first();
 
-            if(!$this->client){
+            if (!$this->client) {
                 $this->client = new Client([
                     'base_uri' => $this->url,
-                    'timeout'  => 30,
+                    'timeout' => 30,
                 ]);
             }
 
@@ -162,16 +162,16 @@ class FedEx extends AbstractCarrier
             throw new \Exception('FedEx account not set');
         }
 
-        $response = $this->client->post('/ship/v1/labels', [
-            'json' => $this->prepareLabelData($data)
-        ]);
+            $response = $this->client->post('/ship/v1/shipments', [
+                'json' => $this->prepareLabelData($data)
+            ]);
 
-        $result = json_decode($response->getBody()->getContents(), true);
+            $result = json_decode($response->getBody()->getContents(), true);
 
-        // 保存标签信息
-        $this->saveLabelInfo($data, $result);
+            // 保存标签信息
+            $this->saveLabelInfo($data, $result);
 
-        return $result;
+            return $result;
     }
 
     public function validateAddress(array $address): array
@@ -202,7 +202,7 @@ class FedEx extends AbstractCarrier
 
         //$this->isResidential = $address['address']['isResidential'];
 
-        if($classification == 'UNKNOWN') {
+        if ($classification == 'UNKNOWN') {
             //throw new \Exception('Address validation returned UNKNOWN classification');
         }
         return $address;
@@ -214,12 +214,11 @@ class FedEx extends AbstractCarrier
             throw new \Exception('FedEx account not set');
         }
 
-        try{
+        try {
             $response = $this->client->post('/rate/v1/rates/quotes', [
                 'json' => $this->prepareRateData($data)
             ]);
-        }
-        catch (GuzzleException $e) {
+        } catch (GuzzleException $e) {
             $body = $e->getResponse()->getBody();
             $errorResponse = json_decode($body, true);
             print_r($errorResponse);
@@ -236,8 +235,17 @@ class FedEx extends AbstractCarrier
             throw new \Exception('FedEx account not set');
         }
 
-        $response = $this->client->get("/track/v1/details/{$trackingNumber}");
-        
+        $response = $this->client->post('/track/v1/trackingnumbers', [
+            'json' => [
+                'includeDetailedScans' => true,
+                'trackingInfo' => [
+                    [
+                        'trackingNumber' => $trackingNumber,
+                    ],
+                ],
+            ],
+        ]);
+
         return json_decode($response->getBody()->getContents(), true);
     }
 
@@ -400,12 +408,12 @@ class FedEx extends AbstractCarrier
                 'stateOrProvinceCode' => $address['address']['stateOrProvinceCode'],
                 'postalCode' => $address['address']['postalCode'],
                 'countryCode' => $address['address']['countryCode'],
-                'residential' => $address['isResidential']
+                'residential' => $address['address']['isResidential']
             ]
         ];
 
         // 如果是住宅地址，确保使用 HOME_DELIVERY 服务
-        if ($address['isResidential'] && $address['address']['countryCode'] === 'US') {
+        if ($address['address']['isResidential'] && $address['address']['countryCode'] === 'US') {
             $formattedAddress['serviceType'] = 'HOME_DELIVERY';
         }
 
@@ -414,7 +422,7 @@ class FedEx extends AbstractCarrier
 
     private function mapServiceType(string $serviceType): string
     {
-        if(empty($serviceType) || !is_string($serviceType)){
+        if (empty($serviceType) || !is_string($serviceType)) {
             $serviceType = 'GROUND SERVICE';
         }
         // 标准化服务类型名称
@@ -428,37 +436,35 @@ class FedEx extends AbstractCarrier
         // 国际运输服务类型映射
         if ($isInternational) {
             $internationalMapping = [
-                'INTERNATIONAL_PRIORITY' => 'INTERNATIONAL_PRIORITY',
-                'INTERNATIONAL_PRIORITY_FREIGHT' => 'INTERNATIONAL_PRIORITY_FREIGHT',
-                'INTERNATIONAL_ECONOMY_FREIGHT' => 'INTERNATIONAL_ECONOMY_FREIGHT',
-                'INTERNATIONAL_ECONOMY' => 'INTERNATIONAL_ECONOMY'
+                'INTERNATIONAL_PRIORITY',
+                'INTERNATIONAL_PRIORITY_FREIGHT',
+                'INTERNATIONAL_ECONOMY_FREIGHT',
+                'INTERNATIONAL_ECONOMY'
             ];
-
-            return $internationalMapping[$serviceType] ?? 'INTERNATIONAL_ECONOMY';
+            return in_array($serviceType, $internationalMapping) ? $serviceType : 'INTERNATIONAL_ECONOMY';
         }
 
         // 国内运输服务类型映射
         $domesticMapping = [
-            'FIRST_OVERNIGHT' => 'FIRST_OVERNIGHT',
-            'PRIORITY_OVERNIGHT' => 'PRIORITY_OVERNIGHT',
-            'STANDARD_OVERNIGHT' => 'STANDARD_OVERNIGHT',
-            'SECOND_DAY_AM' => 'SECOND_DAY_AM',
-            'SECOND_DAY' => 'SECOND_DAY',
-            'EXPRESS_SAVER' => 'EXPRESS_SAVER',
-            'FIRST_OVERNIGHT_FREIGHT' => 'FIRST_OVERNIGHT_FREIGHT',
-            'ONE_DAY_FREIGHT' => 'ONE_DAY_FREIGHT',
-            'TWO_DAY_FREIGHT' => 'TWO_DAY_FREIGHT',
-            'THREE_DAY_FREIGHT' => 'THREE_DAY_FREIGHT',
-            'SMART_POST' => 'SMART_POST'
+            'FIRST_OVERNIGHT',
+            'PRIORITY_OVERNIGHT',
+            'STANDARD_OVERNIGHT',
+            'FEDEX_2_DAY_AM',
+            'FEDEX_2_DAY',
+            'FEDEX_EXPRESS_SAVER',
+            'FEDEX_FIRST_FREIGHT',
+            'FEDEX_1_DAY_FREIGHT',
+            'FEDEX_2_DAY_FREIGHT',
+            'FEDEX_3_DAY_FREIGHT',
+            'SMART_POST'
         ];
-
         // 如果找到匹配的国内服务类型，返回它
-        if (isset($domesticMapping[$serviceType])) {
-            return $domesticMapping[$serviceType];
+        if (in_array($serviceType, $domesticMapping)) {
+            return $serviceType;
         }
 
         // 如果没有匹配的服务类型，根据住宅地址标志返回默认服务
-        return $isResidential ? 'HOME_DELIVERY' : 'GROUND';
+        return $isResidential ? 'GROUND_HOME_DELIVERY' : 'FEDEX_GROUND';
     }
 
     private function normalizeServiceType(string $serviceType): string
@@ -467,65 +473,11 @@ class FedEx extends AbstractCarrier
         $serviceType = trim(strtoupper($serviceType));
 
         // 服务类型名称映射
-        $normalizedTypes = [
-            // 国际服务
-            'INTERNATIONAL PRIORITY' => 'INTERNATIONAL_PRIORITY',
-            'FEDEX INTERNATIONAL PRIORITY' => 'INTERNATIONAL_PRIORITY',
-            'FEDEX INTERNATIONAL PRIORITY FREIGHT' => 'INTERNATIONAL_PRIORITY_FREIGHT',
-            'INTERNATIONAL PRIORITY FREIGHT' => 'INTERNATIONAL_PRIORITY_FREIGHT',
-            'FEDEX INTERNATIONAL ECONOMY FREIGHT' => 'INTERNATIONAL_ECONOMY_FREIGHT',
-            'INTERNATIONAL ECONOMY FREIGHT' => 'INTERNATIONAL_ECONOMY_FREIGHT',
-            'INTERNATIONAL ECONOMY' => 'INTERNATIONAL_ECONOMY',
-            'FEDEX INTERNATIONAL ECONOMY' => 'INTERNATIONAL_ECONOMY',
-
-            // 国内隔夜服务
-            'FEDEX FIRST OVERNIGHT' => 'FIRST_OVERNIGHT',
-            'FIRST OVERNIGHT' => 'FIRST_OVERNIGHT',
-            'FEDEX PRIORITY OVERNIGHT' => 'PRIORITY_OVERNIGHT',
-            'PRIORITY OVERNIGHT' => 'PRIORITY_OVERNIGHT',
-            'FEDEX STANDARD OVERNIGHT' => 'STANDARD_OVERNIGHT',
-            'STANDARD OVERNIGHT' => 'STANDARD_OVERNIGHT',
-
-            // 2天服务
-            'FEDEX 2DAY A.M.' => 'SECOND_DAY_AM',
-            'FEDEX 2DAY AM' => 'SECOND_DAY_AM',
-            '2DAY A.M.' => 'SECOND_DAY_AM',
-            '2DAY AM' => 'SECOND_DAY_AM',
-            'FEDEX 2DAY' => 'SECOND_DAY',
-            '2DAY' => 'SECOND_DAY',
-
-            // 其他快递服务
-            'FEDEX EXPRESS SAVER' => 'EXPRESS_SAVER',
-            'EXPRESS SAVER' => 'EXPRESS_SAVER',
-
-            // 货运服务
-            'FEDEX FIRST OVERNIGHT FREIGHT' => 'FIRST_OVERNIGHT_FREIGHT',
-            'FIRST OVERNIGHT FREIGHT' => 'FIRST_OVERNIGHT_FREIGHT',
-            'FEDEX 1 DAY FREIGHT' => 'ONE_DAY_FREIGHT',
-            'FEDEX ONE DAY FREIGHT' => 'ONE_DAY_FREIGHT',
-            'ONE DAY FREIGHT' => 'ONE_DAY_FREIGHT',
-            'FEDEX 2 DAY FREIGHT' => 'TWO_DAY_FREIGHT',
-            'FEDEX TWO DAY FREIGHT' => 'TWO_DAY_FREIGHT',
-            'TWO DAY FREIGHT' => 'TWO_DAY_FREIGHT',
-            'FEDEX 3 DAY FREIGHT' => 'THREE_DAY_FREIGHT',
-            'FEDEX THREE DAY FREIGHT' => 'THREE_DAY_FREIGHT',
-            'THREE DAY FREIGHT' => 'THREE_DAY_FREIGHT',
-
-            // 特殊服务
-            'FEDEX SMART POST' => 'SMART_POST',
-            'SMART POST' => 'SMART_POST',
-            'SMARTPOST' => 'SMART_POST',
-
-            // 基础服务
-            'GROUND SERVICE' => 'GROUND',
-            'GROUND DELIVERY' => 'GROUND',
-            'HOME DELIVERY' => 'HOME_DELIVERY',
-            'RESIDENTIAL DELIVERY' => 'HOME_DELIVERY'
-        ];
-
-        // 如果找到匹配的标准化名称，返回它
-        if (isset($normalizedTypes[$serviceType])) {
-            return $normalizedTypes[$serviceType];
+        $normalizedTypes = config('serviceTypes.' . $this->getCarrierName());
+        foreach ($normalizedTypes as $standard => $aliases) {
+            if ($serviceType === $standard || in_array($serviceType, array_map('strtoupper', $aliases))) {
+                return $standard;
+            }
         }
 
         // 如果没有找到匹配，尝试移除所有空格和特殊字符后匹配
@@ -544,63 +496,50 @@ class FedEx extends AbstractCarrier
     {
         // 获取默认发件人信息
         $defaultShipper = config('shipping.default_shipper');
-        
+
         // 合并默认发件人信息和传入的数据
         $data['shipper'] = array_merge($defaultShipper, $data['shipper'] ?? []);
+        $formattedAddress = $this->addressFormatter->format($data['recipient'], $data['service_type']);
 
-        $formattedAddress = $this->addressFormatter->format($data, $data['service_type']);
-
+        if (isset($data['recipient']['contact'])) {
+            $formattedAddress['contact'] = $data['recipient']['contact'];
+        }
         // 处理包裹数据
         $packages = [];
         if (isset($data['packages']) && is_array($data['packages'])) {
             // 多个包裹的情况
             foreach ($data['packages'] as $index => $package) {
                 $packages[] = [
-                    'PackagingType' => [
-                        'Code' => '02'
+                    'dimensions' => [
+                        'units' => 'IN',
+                        'length' => $package['length'],
+                        'width' => $package['width'],
+                        'height' => $package['height']
                     ],
-                    'Dimensions' => [
-                        'UnitOfMeasurement' => [
-                            'Code' => 'IN'
-                        ],
-                        'Length' => $package['length'],
-                        'Width' => $package['width'],
-                        'Height' => $package['height']
-                    ],
-                    'PackageWeight' => [
-                        'UnitOfMeasurement' => [
-                            'Code' => 'LBS'
-                        ],
-                        'Weight' => $package['weight']
+                    'weight' => [
+                        'units' => 'LB',
+                        'value' => $package['weight']
                     ]
                 ];
             }
         } else {
             // 单个包裹的情况
             $packages[] = [
-                'PackagingType' => [
-                    'Code' => '02'
+                'dimensions' => [
+                    "units"=> "IN",
+                    'length' => $data['packages']['length'],
+                    'width' => $data['packages']['width'],
+                    'height' => $data['packages']['height']
                 ],
-                'Dimensions' => [
-                    'UnitOfMeasurement' => [
-                        'Code' => 'IN'
-                    ],
-                    'Length' => $data['length'],
-                    'Width' => $data['width'],
-                    'Height' => $data['height']
-                ],
-                'PackageWeight' => [
-                    'UnitOfMeasurement' => [
-                        'Code' => 'LBS'
-                    ],
-                    'Weight' => $data['weight']
+                'weight' => [
+                    'units' => 'LB',
+                    'value' => $data['packages']['weight']
                 ]
             ];
         }
-
         $requestedShipment = [
-            'shipper' => $this->formatAddress($formattedAddress['shipper']),
-            'recipients' => [$this->formatAddress($formattedAddress['recipient'])],
+            'shipper' => $this->formatAddress($data['shipper']),
+            'recipients' => [$this->formatAddress($formattedAddress)],
             'pickupType' => 'DROPOFF_AT_FEDEX_LOCATION',
             'serviceType' => $this->mapServiceType($formattedAddress['service_type']),
             'packagingType' => 'YOUR_PACKAGING',
@@ -655,21 +594,36 @@ class FedEx extends AbstractCarrier
                 'payor' => [
                     'responsibleParty' => [
                         'accountNumber' => [
-                            'value' => $this->token->accountname
+                            'value' => $data['account_number']
                         ]
+                    ],
+                    'address' => [
+                        'streetLines' => $data['shipper']['address']['streetLines'],
+                        'city' => $data['shipper']['address']['city'],
+                        'stateOrProvinceCode' => $data['shipper']['address']['stateOrProvinceCode'],
+                        'postalCode' => $data['shipper']['address']['postalCode'],
+                        'countryCode' => $data['shipper']['address']['countryCode']
                     ]
                 ]
             ];
-            $requestedShipment['freightChargesPayment'] = [
-                'paymentType' => 'SENDER',
-                'payor' => [
-                    'responsibleParty' => [
-                        'accountNumber' => [
-                            'value' => $this->token->accountname
-                        ]
-                    ]
-                ]
-            ];
+            // FedEx api 看起來不需要這些資料
+            // $requestedShipment['freightChargesPayment'] = [
+            //     'paymentType' => 'SENDER',
+            //     'payor' => [
+            //         'responsibleParty' => [
+            //             'accountNumber' => [
+            //                 'value' => $data['account_number']
+            //             ]
+            //         ],
+            //         'address' => [
+            //             'streetLines' => $data['shipper']['address']['streetLines'],
+            //             'city' => $data['shipper']['address']['city'],
+            //             'stateOrProvinceCode' => $data['shipper']['address']['stateOrProvinceCode'],
+            //             'postalCode' => $data['shipper']['address']['postalCode'],
+            //             'countryCode' => $data['shipper']['address']['countryCode']
+            //         ]
+            //     ]
+            // ];
         }
 
         // 如果存在DepartmentNotes，添加到请求中
@@ -742,9 +696,8 @@ class FedEx extends AbstractCarrier
                 ]
             );
         }
-
         // 如果是国际订单，添加商业发票和形式发票信息，清关费由客户支付
-        if ($this->isInternationalShipment($shipper['address']['countryCode'], $formattedAddress['address']['countryCode'])) {
+        if ($this->isInternationalShipment($data['shipper']['address']['countryCode'], $formattedAddress['address']['countryCode'])) {
             $requestedShipment['customsClearanceDetail'] = [
                 'dutiesPayment' => [
                     'paymentType' => 'RECIPIENT' // 默认收货方支付清关税
@@ -853,7 +806,9 @@ class FedEx extends AbstractCarrier
         }
 
         return [
-            'requestedShipment' => $requestedShipment
+            'requestedShipment' => $requestedShipment,
+            'accountNumber' => ['value' => $data['account_number']],
+            'labelResponseOptions' => 'URL_ONLY',
         ];
     }
 
@@ -865,7 +820,7 @@ class FedEx extends AbstractCarrier
     private function prepareCommodities(array $data): array
     {
         $commodities = [];
-        
+
         if (isset($data['items']) && is_array($data['items'])) {
             foreach ($data['items'] as $item) {
                 $commodities[] = [
@@ -918,16 +873,16 @@ class FedEx extends AbstractCarrier
     {
         // 获取默认发件人信息
         $defaultShipper = config('shipping.default_shipper');
-  
+
         // 合并默认发件人信息和传入的数据
         $data['shipper'] = array_merge($defaultShipper, $data['shipper'] ?? []);
 
-        $data['service_type'] = isset($data['service_type'])?:null;
+        $data['service_type'] = isset($data['service_type']) ?: null;
         $formattedAddress = $this->addressFormatter->format($data['recipient'], $data['service_type']);
-  
+
         // 获取格式化后的地址
         //$shipperAddress = $this->formatAddress($formattedAddress['shipper']);
-       // $recipientAddress = $this->formatAddress($formattedAddress['recipient']);
+        // $recipientAddress = $this->formatAddress($formattedAddress['recipient']);
 
         // 确定最终的服务类型
         $serviceType = $this->mapServiceType($formattedAddress['service_type']);
@@ -943,12 +898,12 @@ class FedEx extends AbstractCarrier
                     'sequenceNumber' => $index,
                     'weight' => [
                         'units' => 'LB',
-                        'value' => (float)$package['weight']
+                        'value' => (float) $package['weight']
                     ],
                     'dimensions' => [
-                        'length' => (float)$package['length'],
-                        'width' => (float)$package['width'],
-                        'height' => (float)$package['height'],
+                        'length' => (float) $package['length'],
+                        'width' => (float) $package['width'],
+                        'height' => (float) $package['height'],
                         'units' => 'IN'
                     ]
                 ];
@@ -959,12 +914,12 @@ class FedEx extends AbstractCarrier
                 'sequenceNumber' => 1,
                 'weight' => [
                     'units' => 'LB',
-                    'value' => (float)$data['package']['weight']
+                    'value' => (float) $data['package']['weight']
                 ],
                 'dimensions' => [
-                    'length' => (float)$data['package']['length'],
-                    'width' => (float)$data['package']['width'],
-                    'height' => (float)$data['package']['height'],
+                    'length' => (float) $data['package']['length'],
+                    'width' => (float) $data['package']['width'],
+                    'height' => (float) $data['package']['height'],
                     'units' => 'IN'
                 ]
             ];
@@ -979,7 +934,7 @@ class FedEx extends AbstractCarrier
                 ]
             ];*/
             $signatureOptionType = $this->mapSignatureType($data['signature_type'] ?? 'DIRECT');
-            foreach($packageLineItems as $key => $item){
+            foreach ($packageLineItems as $key => $item) {
                 $packageLineItems[$key]['packageSpecialServices'] = [
                     'signatureOptionType' => $signatureOptionType
                 ];
@@ -988,11 +943,11 @@ class FedEx extends AbstractCarrier
 
         unset($formattedAddress['service_type']);
         $formattedAddress['address']['residential'] = False;
-        if($formattedAddress['address']['isResidential']){
+        if ($formattedAddress['address']['isResidential']) {
             $formattedAddress['address']['residential'] = True;
-        } 
+        }
         $requestedShipment = [
-            'shipper' => $data['shipper'] ,
+            'shipper' => $data['shipper'],
             'recipient' => $formattedAddress,
             'pickupType' => 'USE_SCHEDULED_PICKUP',
             'rateRequestType' => ["LIST", "ACCOUNT"],
@@ -1092,8 +1047,8 @@ class FedEx extends AbstractCarrier
                 ];
             }
         }
-//print_r($requestedShipment);
-        if($this->carrierAccount){
+        //print_r($requestedShipment);
+        if ($this->carrierAccount) {
             return [
                 'accountNumber' => [
                     'value' => $this->carrierAccount
@@ -1127,11 +1082,11 @@ class FedEx extends AbstractCarrier
     {
         // 检查进口商和收货人是否相同
         return $importer['contact']['personName'] !== $recipient['contact']['personName'] ||
-               $importer['address']['streetLines'] !== $recipient['address']['streetLines'] ||
-               $importer['address']['city'] !== $recipient['address']['city'] ||
-               $importer['address']['stateOrProvinceCode'] !== $recipient['address']['stateOrProvinceCode'] ||
-               $importer['address']['postalCode'] !== $recipient['address']['postalCode'] ||
-               $importer['address']['countryCode'] !== $recipient['address']['countryCode'];
+            $importer['address']['streetLines'] !== $recipient['address']['streetLines'] ||
+            $importer['address']['city'] !== $recipient['address']['city'] ||
+            $importer['address']['stateOrProvinceCode'] !== $recipient['address']['stateOrProvinceCode'] ||
+            $importer['address']['postalCode'] !== $recipient['address']['postalCode'] ||
+            $importer['address']['countryCode'] !== $recipient['address']['countryCode'];
     }
 
     private function mapReasonForExport(string $reason): string
@@ -1184,16 +1139,16 @@ class FedEx extends AbstractCarrier
     {
         // 从响应中提取跟踪号码
         $trackingNumber = $response['output']['transactionShipments'][0]['masterTrackingNumber'] ?? null;
-        
+
         if (!$trackingNumber) {
             return;
         }
 
         // 从响应中提取标签URL
-        $labelUrl = $response['output']['transactionShipments'][0]['labelURL'] ?? null;
+        $labelUrl = $response['output']['transactionShipments'][0]['pieceResponses'][0]['packageDocuments'][0]['url'] ?? null;
 
         // 从响应中提取运费
-        $shippingCost = $response['output']['transactionShipments'][0]['rateDetails'][0]['totalNetCharge'] ?? null;
+        $shippingCost = $response['output']['transactionShipments'][0]['completedShipmentDetail']['shipmentRating']['shipmentRateDetails'][0]['totalNetCharge'] ?? null;
 
         // 准备包裹信息
         $packageInfo = [];
@@ -1211,7 +1166,7 @@ class FedEx extends AbstractCarrier
         // 创建标签记录
         ShippingLabel::create([
             'carrier' => 'fedex',
-            'account_number' => $this->token->accountname,
+            'account_number' => $data['account_number'],
             'tracking_number' => $trackingNumber,
             'invoice_number' => $data['InvoiceNumber'] ?? null,
             'service_type' => $data['service_type'] ?? null,
@@ -1234,4 +1189,4 @@ class FedEx extends AbstractCarrier
             'status' => 'ACTIVE'
         ]);
     }
-} 
+}
