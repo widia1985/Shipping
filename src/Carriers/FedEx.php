@@ -162,16 +162,16 @@ class FedEx extends AbstractCarrier
             throw new \Exception('FedEx account not set');
         }
 
-            $response = $this->client->post('/ship/v1/shipments', [
-                'json' => $this->prepareLabelData($data)
-            ]);
+        $response = $this->client->post('/ship/v1/shipments', [
+            'json' => $this->prepareLabelData($data)
+        ]);
 
-            $result = json_decode($response->getBody()->getContents(), true);
+        $result = json_decode($response->getBody()->getContents(), true);
 
-            // 保存标签信息
-            $this->saveLabelInfo($data, $result);
+        // 保存标签信息
+        $this->saveLabelInfo($data, $result);
 
-            return $result;
+        return $result;
     }
 
     public function validateAddress(array $address): array
@@ -272,16 +272,16 @@ class FedEx extends AbstractCarrier
             throw new \Exception('FedEx account not set');
         }
 
-        $response = $this->client->post('/ship/v1/returns', [
-            'json' => $this->prepareReturnLabelData($data)
-        ]);
+        $response = $this->client->post('/ship/v1/shipments', [
+                'json' => $this->prepareReturnLabelData($data)
+            ]);
 
-        $result = json_decode($response->getBody()->getContents(), true);
+            $result = json_decode($response->getBody()->getContents(), true);
 
-        // 保存标签信息
-        $this->saveLabelInfo($data, $result);
+            // 保存标签信息
+            $this->saveLabelInfo($data, $result);
 
-        return $result;
+            return $result;
     }
 
     /**
@@ -289,108 +289,136 @@ class FedEx extends AbstractCarrier
      */
     private function prepareReturnLabelData(array $data): array
     {
-        $formattedAddress = $this->addressFormatter->format($data, $data['service_type']);
-
         // 如果没有提供退货地址，使用默认退货地址
-        if (empty($formattedAddress['return_address'])) {
-            $formattedAddress['return_address'] = config('shipping.default_return_address');
+        if (empty($data['return_address'])) {
+            $data['return_address'] = config('shipping.default_return_address');
+        }
+
+        $return_address = $this->addressFormatter->format($data['return_address'], $data['service_type']);
+        $shipper = $this->addressFormatter->format($data['shipper'], $data['service_type']);
+
+        if (isset($data['return_address']['contact'])) {
+            $return_address['contact'] = $data['return_address']['contact'];
+        }
+        if (isset($data['shipper']['contact'])) {
+            $shipper['contact'] = $data['shipper']['contact'];
         }
 
         $requestedShipment = [
-            'shipper' => $this->formatAddress($formattedAddress['shipper']), // 客户地址
-            'recipients' => [$this->formatAddress($formattedAddress['return_address'])], // 退货地址
+            'shipper' => $this->formatAddress($shipper), // 客户地址
+            'recipients' => [$this->formatAddress($return_address)], // 退货地址
             'pickupType' => 'DROPOFF_AT_FEDEX_LOCATION',
-            'serviceType' => $this->mapServiceType($formattedAddress['service_type']),
+            'serviceType' => $this->mapServiceType($data['service_type']),
             'packagingType' => 'YOUR_PACKAGING',
             'totalPackageCount' => 1,
+            'blockInsightVisibility' => false,
             'requestedPackageLineItems' => [
                 [
-                    'PackagingType' => [
-                        'Code' => '02'
+                    'dimensions' => [
+                        'units' => 'IN',
+                        'length' => $data['package']['length'],
+                        'width' => $data['package']['width'],
+                        'height' => $data['package']['height']
                     ],
-                    'Dimensions' => [
-                        'UnitOfMeasurement' => [
-                            'Code' => 'IN'
-                        ],
-                        'Length' => $data['package']['length'],
-                        'Width' => $data['package']['width'],
-                        'Height' => $data['package']['height']
+                    'weight' => [
+                        'units' => 'LB',
+                        'value' => $data['package']['weight']
                     ],
-                    'PackageWeight' => [
-                        'UnitOfMeasurement' => [
-                            'Code' => 'LBS'
-                        ],
-                        'Weight' => $data['package']['weight']
-                    ]
+                    'itemDescription' => 'Defective product for return'
                 ]
             ],
             'labelSpecification' => [
                 'imageType' => 'PDF',
                 'labelStockType' => 'PAPER_4X6'
             ],
-            'returnShipmentDetail' => [
-                'returnType' => 'PRINT_RETURN_LABEL',
-                'rma' => [
-                    'number' => $data['rma_number'] ?? '',
-                    'reason' => $data['return_reason']
+            'shipmentSpecialServices' => [
+                'specialServiceTypes' => [
+                    'RETURN_SHIPMENT'
                 ],
-                'returnInstructions' => $data['return_instructions'] ?? '',
-                'returnAuthorizationNumber' => $data['return_authorization_number'] ?? '',
-                'originalTrackingNumber' => $data['original_tracking_number']
-            ]
+                'returnShipmentDetail' => [
+                    'returnEmailDetail' => [
+                        'merchantPhoneNumber' => $data['return_address']['contact']['phoneNumber'],
+                    ],
+                    'rma' => [
+                        'reason' => $data['return_reason']
+                    ],
+                    'returnType' => 'PENDING',
+                ],
+                'pendingShipmentDetail' => [
+                    'pendingShipmentType' => 'EMAIL',
+                    'emailLabelDetail' => [
+                        'recipients' => [
+                            [
+                                'emailAddress' => $data['return_address']['contact']['emailAddress'],
+                                'role' => 'SHIPMENT_COMPLETOR',
+                            ]
+                        ]
+                    ],
+                    'expirationTimeStamp' => $data['expiration_time']
+                ]
+            ],
+
         ];
 
         // 添加签名要求
         if (!empty($data['signature_required'])) {
-            $requestedShipment['shipmentSpecialServices'] = [
-                'specialServiceTypes' => ['SIGNATURE_OPTION'],
-                'signatureOptionDetail' => [
-                    'optionType' => $this->mapSignatureType($data['signature_type'] ?? 'DIRECT')
-                ]
-            ];
+            foreach ($requestedShipment['requestedPackageLineItems'] as $index => $package) {
+                $requestedShipment['requestedPackageLineItems'][$index]['packageSpecialServices'] = [
+                    'specialServiceTypes' => ['SIGNATURE_OPTION'],
+                    'signatureOptionType' => $this->mapSignatureType($data['signature_type'] ?? 'DIRECT'),
+                ];
+            }
         }
 
         // 添加发货通知
         if (!empty($data['ship_notify']) && !empty($data['ship_notify_email'])) {
-            $requestedShipment['shipmentSpecialServices'] = array_merge(
-                $requestedShipment['shipmentSpecialServices'] ?? ['specialServiceTypes' => []],
-                [
-                    'specialServiceTypes' => array_merge(
-                        $requestedShipment['shipmentSpecialServices']['specialServiceTypes'] ?? [],
-                        ['EVENT_NOTIFICATION']
-                    ),
-                    'eventNotificationDetail' => [
-                        'aggregationType' => 'PER_SHIPMENT',
-                        'personalMessage' => $data['ship_notify_message'] ?? 'Your return shipment has been processed.',
-                        'eventNotifications' => [
-                            [
-                                'role' => 'SHIPPER',
-                                'events' => ['ON_SHIPMENT'],
-                                'notificationDetail' => [
-                                    'notificationType' => 'EMAIL',
-                                    'emailDetail' => [
-                                        'emailAddress' => $data['ship_notify_email'],
-                                        'name' => $data['ship_notify_contact_name'] ?? '',
-                                        'notificationEventType' => ['ON_SHIPMENT'],
-                                        'format' => 'HTML',
-                                        'localization' => [
-                                            'languageCode' => $data['ship_notify_language'] ?? 'en',
-                                            'localeCode' => $data['ship_notify_dialect'] ?? 'US'
-                                        ]
-                                    ]
-                                ],
-                                'formatSpecification' => [
-                                    'type' => 'HTML'
-                                ]
-                            ]
+            $requestedShipment['emailNotificationDetail'] = [
+                "aggregationType" => "PER_PACKAGE",
+                "emailNotificationRecipients" => [
+                    [
+                        "name" => $data['ship_notify_contact_name'] ?? '',
+                        "emailNotificationRecipientType" => "SHIPPER",
+                        "emailAddress" => $data['ship_notify_email'],
+                        "notificationFormatType" => "TEXT",
+                        "notificationType" => "EMAIL",
+                        "locale" => $data['ship_notify_dialect'] ?? 'US',
+                        "notificationEventType" => [
+                            "ON_PICKUP_DRIVER_ARRIVED",
+                            "ON_SHIPMENT"
                         ]
                     ]
-                ]
-            );
+                ],
+                "personalMessage" => $data['ship_notify_message'] ?? 'Your return shipment has been processed.',
+            ];
         }
+        // 如果使用第三方账户，添加第三方账户信息
+        $paymentType = !empty($data['third_party_account']) ? 'THIRD_PARTY' : 'SENDER';
+        $accountNumber = !empty($data['third_party_account'])
+            ? $data['third_party_account']
+            : $data['account_number'];
+
+        $payor = [
+            'responsibleParty' => [
+                'accountNumber' => [
+                    'value' => $accountNumber
+                ]
+            ]
+        ];
+        if ($paymentType === 'THIRD_PARTY') {
+            $payor['responsibleParty']['address'] = $shipper['address'];
+        } else {
+            $payor['address'] = $shipper['address'];
+        }
+        $requestedShipment['shippingChargesPayment'] = [
+            'paymentType' => $paymentType,
+            'payor' => $payor
+        ];
+
 
         return [
-            'requestedShipment' => $requestedShipment
+            'requestedShipment' => $requestedShipment,
+            'accountNumber' => ['value' => $data['account_number']],
+            'labelResponseOptions' => 'URL_ONLY',
         ];
     }
 
@@ -526,7 +554,7 @@ class FedEx extends AbstractCarrier
             // 单个包裹的情况
             $packages[] = [
                 'dimensions' => [
-                    "units"=> "IN",
+                    "units" => "IN",
                     'length' => $data['packages']['length'],
                     'width' => $data['packages']['width'],
                     'height' => $data['packages']['height']
@@ -1138,7 +1166,7 @@ class FedEx extends AbstractCarrier
     private function saveLabelInfo(array $data, array $response): void
     {
         // 从响应中提取跟踪号码
-        $trackingNumber = $response['output']['transactionShipments'][0]['masterTrackingNumber'] ?? null;
+        $trackingNumber = $response['output']['transactionShipments'][0]['pieceResponses'][0]['trackingNumber'] ?? null;
 
         if (!$trackingNumber) {
             return;
@@ -1168,7 +1196,7 @@ class FedEx extends AbstractCarrier
             'carrier' => 'fedex',
             'account_number' => $data['account_number'],
             'tracking_number' => $trackingNumber,
-            'invoice_number' => $data['InvoiceNumber'] ?? null,
+            'invoice_number' => $data['invoice_number'] ?? null,
             'service_type' => $data['service_type'] ?? null,
             'shipping_cost' => $shippingCost,
             'label_url' => $labelUrl,
