@@ -7,7 +7,7 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Carbon\Carbon;
 use Widia\Shipping\Models\ShippingLabel;
-
+use Widia\Shipping\Payloads\FedEx\ShipmentPayloads;
 class FedEx extends AbstractCarrier
 {
     protected $test_url = 'https://apis-sandbox.fedex.com';
@@ -24,6 +24,7 @@ class FedEx extends AbstractCarrier
     protected $accountName;
     protected $carrierAccount;
     protected $markup = 0;
+    protected $shipmentPayloads;
 
     public function __construct()
     {
@@ -96,6 +97,13 @@ class FedEx extends AbstractCarrier
             'FedEx'
         );
 
+        $this->shipmentPayloads = new ShipmentPayloads(
+            $this->addressFormatter,
+            fn($address) => $this->formatAddress($address),
+            fn($serviceType) => $this->mapServiceType($serviceType),
+            fn($type) => $this->mapSignatureType($type)
+        );
+
         return $this;
     }
 
@@ -161,19 +169,33 @@ class FedEx extends AbstractCarrier
         if (!$this->token) {
             throw new \Exception('FedEx account not set');
         }
+        $payload = $this->shipmentPayloads->build($data);
 
-        $response = $this->client->post('/ship/v1/shipments', [
-            'json' => $this->prepareLabelData($data)
-        ]);
+        return $this->sendShipmentRequest($payload, $data);
+    }
+    public function createReturnLabel(array $data): array
+    {
+        if (!$this->token) {
+            throw new \Exception('FedEx account not set');
+        }
+        $payload = $this->shipmentPayloads->build($data, true);
 
-        $result = json_decode($response->getBody()->getContents(), true);
-
-        // 保存标签信息
+        return $this->sendShipmentRequest($payload, $data);
+    }
+    private function sendShipmentRequest(array $payload, array $data): array
+    {
+        try {
+            $response = $this->client->post('/ship/v1/shipments', ['json' => $payload]);
+            $result = json_decode($response->getBody()->getContents(), true);
+        } catch (GuzzleException $e) {
+            $body = $e->getResponse()->getBody();
+            $errorResponse = json_decode($body, true);
+            dd($errorResponse);
+            throw new \Exception('Failed to get FedEx rates: ' . $e->getMessage());
+        }
         $this->saveLabelInfo($data, $result);
-
         return $result;
     }
-
     public function validateAddress(array $address): array
     {
         if (!$this->token) {
@@ -207,7 +229,6 @@ class FedEx extends AbstractCarrier
         }
         return $address;
     }
-
     public function getRates(array $data): array
     {
         if (!$this->token) {
@@ -228,7 +249,6 @@ class FedEx extends AbstractCarrier
 
         return json_decode($response->getBody(), true);
     }
-
     public function trackShipment(string $trackingNumber): array
     {
         if (!$this->token) {
@@ -248,7 +268,6 @@ class FedEx extends AbstractCarrier
 
         return json_decode($response->getBody()->getContents(), true);
     }
-
     public function cancelLabel(string $trackingNumber): bool
     {
         if (!$this->token) {
@@ -262,166 +281,6 @@ class FedEx extends AbstractCarrier
             throw new \Exception('Failed to cancel FedEx label: ' . $e->getMessage());
         }
     }
-
-    /**
-     * 创建退货标签
-     */
-    public function createReturnLabel(array $data): array
-    {
-        if (!$this->token) {
-            throw new \Exception('FedEx account not set');
-        }
-
-        $response = $this->client->post('/ship/v1/shipments', [
-                'json' => $this->prepareReturnLabelData($data)
-            ]);
-
-            $result = json_decode($response->getBody()->getContents(), true);
-
-            // 保存标签信息
-            $this->saveLabelInfo($data, $result);
-
-            return $result;
-    }
-
-    /**
-     * 准备退货标签数据
-     */
-    private function prepareReturnLabelData(array $data): array
-    {
-        // 如果没有提供退货地址，使用默认退货地址
-        if (empty($data['return_address'])) {
-            $data['return_address'] = config('shipping.default_return_address');
-        }
-
-        $return_address = $this->addressFormatter->format($data['return_address'], $data['service_type']);
-        $shipper = $this->addressFormatter->format($data['shipper'], $data['service_type']);
-
-        if (isset($data['return_address']['contact'])) {
-            $return_address['contact'] = $data['return_address']['contact'];
-        }
-        if (isset($data['shipper']['contact'])) {
-            $shipper['contact'] = $data['shipper']['contact'];
-        }
-
-        $requestedShipment = [
-            'shipper' => $this->formatAddress($shipper), // 客户地址
-            'recipients' => [$this->formatAddress($return_address)], // 退货地址
-            'pickupType' => 'DROPOFF_AT_FEDEX_LOCATION',
-            'serviceType' => $this->mapServiceType($data['service_type']),
-            'packagingType' => 'YOUR_PACKAGING',
-            'totalPackageCount' => 1,
-            'blockInsightVisibility' => false,
-            'requestedPackageLineItems' => [
-                [
-                    'dimensions' => [
-                        'units' => 'IN',
-                        'length' => $data['package']['length'],
-                        'width' => $data['package']['width'],
-                        'height' => $data['package']['height']
-                    ],
-                    'weight' => [
-                        'units' => 'LB',
-                        'value' => $data['package']['weight']
-                    ],
-                    'itemDescription' => 'Defective product for return'
-                ]
-            ],
-            'labelSpecification' => [
-                'imageType' => 'PDF',
-                'labelStockType' => 'PAPER_4X6'
-            ],
-            'shipmentSpecialServices' => [
-                'specialServiceTypes' => [
-                    'RETURN_SHIPMENT'
-                ],
-                'returnShipmentDetail' => [
-                    'returnEmailDetail' => [
-                        'merchantPhoneNumber' => $data['return_address']['contact']['phoneNumber'],
-                    ],
-                    'rma' => [
-                        'reason' => $data['return_reason']
-                    ],
-                    'returnType' => 'PENDING',
-                ],
-                'pendingShipmentDetail' => [
-                    'pendingShipmentType' => 'EMAIL',
-                    'emailLabelDetail' => [
-                        'recipients' => [
-                            [
-                                'emailAddress' => $data['return_address']['contact']['emailAddress'],
-                                'role' => 'SHIPMENT_COMPLETOR',
-                            ]
-                        ]
-                    ],
-                    'expirationTimeStamp' => $data['expiration_time']
-                ]
-            ],
-
-        ];
-
-        // 添加签名要求
-        if (!empty($data['signature_required'])) {
-            foreach ($requestedShipment['requestedPackageLineItems'] as $index => $package) {
-                $requestedShipment['requestedPackageLineItems'][$index]['packageSpecialServices'] = [
-                    'specialServiceTypes' => ['SIGNATURE_OPTION'],
-                    'signatureOptionType' => $this->mapSignatureType($data['signature_type'] ?? 'DIRECT'),
-                ];
-            }
-        }
-
-        // 添加发货通知
-        if (!empty($data['ship_notify']) && !empty($data['ship_notify_email'])) {
-            $requestedShipment['emailNotificationDetail'] = [
-                "aggregationType" => "PER_PACKAGE",
-                "emailNotificationRecipients" => [
-                    [
-                        "name" => $data['ship_notify_contact_name'] ?? '',
-                        "emailNotificationRecipientType" => "SHIPPER",
-                        "emailAddress" => $data['ship_notify_email'],
-                        "notificationFormatType" => "TEXT",
-                        "notificationType" => "EMAIL",
-                        "locale" => $data['ship_notify_dialect'] ?? 'US',
-                        "notificationEventType" => [
-                            "ON_PICKUP_DRIVER_ARRIVED",
-                            "ON_SHIPMENT"
-                        ]
-                    ]
-                ],
-                "personalMessage" => $data['ship_notify_message'] ?? 'Your return shipment has been processed.',
-            ];
-        }
-        // 如果使用第三方账户，添加第三方账户信息
-        $paymentType = !empty($data['third_party_account']) ? 'THIRD_PARTY' : 'SENDER';
-        $accountNumber = !empty($data['third_party_account'])
-            ? $data['third_party_account']
-            : $data['account_number'];
-
-        $payor = [
-            'responsibleParty' => [
-                'accountNumber' => [
-                    'value' => $accountNumber
-                ]
-            ]
-        ];
-        if ($paymentType === 'THIRD_PARTY') {
-            $payor['responsibleParty']['address'] = $shipper['address'];
-        } else {
-            $payor['address'] = $shipper['address'];
-        }
-        $requestedShipment['shippingChargesPayment'] = [
-            'paymentType' => $paymentType,
-            'payor' => $payor
-        ];
-
-
-        return [
-            'requestedShipment' => $requestedShipment,
-            'accountNumber' => ['value' => $data['account_number']],
-            'labelResponseOptions' => 'URL_ONLY',
-        ];
-    }
-
     private function formatAddress(array $address): array
     {
         $formattedAddress = [
@@ -447,7 +306,6 @@ class FedEx extends AbstractCarrier
 
         return $formattedAddress;
     }
-
     private function mapServiceType(string $serviceType): string
     {
         if (empty($serviceType) || !is_string($serviceType)) {
@@ -494,7 +352,6 @@ class FedEx extends AbstractCarrier
         // 如果没有匹配的服务类型，根据住宅地址标志返回默认服务
         return $isResidential ? 'GROUND_HOME_DELIVERY' : 'FEDEX_GROUND';
     }
-
     private function normalizeServiceType(string $serviceType): string
     {
         // 转换为大写并移除多余的空格
@@ -519,384 +376,10 @@ class FedEx extends AbstractCarrier
         // 如果仍然没有匹配，返回原始输入
         return $serviceType;
     }
-
-    private function prepareLabelData(array $data): array
-    {
-        // 获取默认发件人信息
-        $defaultShipper = config('shipping.default_shipper');
-
-        // 合并默认发件人信息和传入的数据
-        $data['shipper'] = array_merge($defaultShipper, $data['shipper'] ?? []);
-        $formattedAddress = $this->addressFormatter->format($data['recipient'], $data['service_type']);
-
-        if (isset($data['recipient']['contact'])) {
-            $formattedAddress['contact'] = $data['recipient']['contact'];
-        }
-        // 处理包裹数据
-        $packages = [];
-        if (isset($data['packages']) && is_array($data['packages'])) {
-            // 多个包裹的情况
-            foreach ($data['packages'] as $index => $package) {
-                $packages[] = [
-                    'dimensions' => [
-                        'units' => 'IN',
-                        'length' => $package['length'],
-                        'width' => $package['width'],
-                        'height' => $package['height']
-                    ],
-                    'weight' => [
-                        'units' => 'LB',
-                        'value' => $package['weight']
-                    ]
-                ];
-            }
-        } else {
-            // 单个包裹的情况
-            $packages[] = [
-                'dimensions' => [
-                    "units" => "IN",
-                    'length' => $data['packages']['length'],
-                    'width' => $data['packages']['width'],
-                    'height' => $data['packages']['height']
-                ],
-                'weight' => [
-                    'units' => 'LB',
-                    'value' => $data['packages']['weight']
-                ]
-            ];
-        }
-        $requestedShipment = [
-            'shipper' => $this->formatAddress($data['shipper']),
-            'recipients' => [$this->formatAddress($formattedAddress)],
-            'pickupType' => 'DROPOFF_AT_FEDEX_LOCATION',
-            'serviceType' => $this->mapServiceType($formattedAddress['service_type']),
-            'packagingType' => 'YOUR_PACKAGING',
-            'totalPackageCount' => count($packages),
-            'requestedPackageLineItems' => $packages,
-            'labelSpecification' => [
-                'imageType' => 'PDF',
-                'labelStockType' => 'PAPER_4X6'
-            ]
-        ];
-
-        // 如果使用第三方账户，添加第三方账户信息
-        if (!empty($data['third_party_account'])) {
-            $requestedShipment['shippingChargesPayment'] = [
-                'paymentType' => 'THIRD_PARTY',
-                'payor' => [
-                    'responsibleParty' => [
-                        'accountNumber' => [
-                            'value' => $data['third_party_account']
-                        ],
-                        'address' => [
-                            'streetLines' => $formattedAddress['shipper']['address']['streetLines'],
-                            'city' => $formattedAddress['shipper']['address']['city'],
-                            'stateOrProvinceCode' => $formattedAddress['shipper']['address']['stateOrProvinceCode'],
-                            'postalCode' => $formattedAddress['shipper']['address']['postalCode'],
-                            'countryCode' => $formattedAddress['shipper']['address']['countryCode']
-                        ]
-                    ]
-                ]
-            ];
-            // 添加运输费用支付信息
-            $requestedShipment['freightChargesPayment'] = [
-                'paymentType' => 'THIRD_PARTY',
-                'payor' => [
-                    'responsibleParty' => [
-                        'accountNumber' => [
-                            'value' => $data['third_party_account']
-                        ],
-                        'address' => [
-                            'streetLines' => $formattedAddress['shipper']['address']['streetLines'],
-                            'city' => $formattedAddress['shipper']['address']['city'],
-                            'stateOrProvinceCode' => $formattedAddress['shipper']['address']['stateOrProvinceCode'],
-                            'postalCode' => $formattedAddress['shipper']['address']['postalCode'],
-                            'countryCode' => $formattedAddress['shipper']['address']['countryCode']
-                        ]
-                    ]
-                ]
-            ];
-        } else {
-            $requestedShipment['shippingChargesPayment'] = [
-                'paymentType' => 'SENDER',
-                'payor' => [
-                    'responsibleParty' => [
-                        'accountNumber' => [
-                            'value' => $data['account_number']
-                        ]
-                    ],
-                    'address' => [
-                        'streetLines' => $data['shipper']['address']['streetLines'],
-                        'city' => $data['shipper']['address']['city'],
-                        'stateOrProvinceCode' => $data['shipper']['address']['stateOrProvinceCode'],
-                        'postalCode' => $data['shipper']['address']['postalCode'],
-                        'countryCode' => $data['shipper']['address']['countryCode']
-                    ]
-                ]
-            ];
-            // FedEx api 看起來不需要這些資料
-            // $requestedShipment['freightChargesPayment'] = [
-            //     'paymentType' => 'SENDER',
-            //     'payor' => [
-            //         'responsibleParty' => [
-            //             'accountNumber' => [
-            //                 'value' => $data['account_number']
-            //             ]
-            //         ],
-            //         'address' => [
-            //             'streetLines' => $data['shipper']['address']['streetLines'],
-            //             'city' => $data['shipper']['address']['city'],
-            //             'stateOrProvinceCode' => $data['shipper']['address']['stateOrProvinceCode'],
-            //             'postalCode' => $data['shipper']['address']['postalCode'],
-            //             'countryCode' => $data['shipper']['address']['countryCode']
-            //         ]
-            //     ]
-            // ];
-        }
-
-        // 如果存在DepartmentNotes，添加到请求中
-        if (!empty($data['DepartmentNotes'])) {
-            $requestedShipment['departmentNotes'] = $data['DepartmentNotes'];
-        }
-
-        // 如果存在Reference，添加到请求中
-        if (!empty($data['Reference'])) {
-            $requestedShipment['shipmentSpecialServices'] = [
-                'specialServiceTypes' => ['REFERENCE'],
-                'reference' => [
-                    'referenceType' => 'CUSTOMER_REFERENCE',
-                    'value' => $data['Reference']
-                ]
-            ];
-        }
-
-        // 添加签名要求
-        if (!empty($data['signature_required'])) {
-            $requestedShipment['shipmentSpecialServices'] = array_merge(
-                $requestedShipment['shipmentSpecialServices'] ?? ['specialServiceTypes' => []],
-                [
-                    'specialServiceTypes' => array_merge(
-                        $requestedShipment['shipmentSpecialServices']['specialServiceTypes'] ?? [],
-                        ['SIGNATURE_OPTION']
-                    ),
-                    'signatureOptionDetail' => [
-                        'optionType' => $this->mapSignatureType($data['signature_type'] ?? 'DIRECT')
-                    ]
-                ]
-            );
-        }
-
-        // 添加发货通知功能
-        if (!empty($data['ship_notify']) && $data['ship_notify'] === true) {
-            $requestedShipment['shipmentSpecialServices'] = array_merge(
-                $requestedShipment['shipmentSpecialServices'] ?? ['specialServiceTypes' => []],
-                [
-                    'specialServiceTypes' => array_merge(
-                        $requestedShipment['shipmentSpecialServices']['specialServiceTypes'] ?? [],
-                        ['EVENT_NOTIFICATION']
-                    ),
-                    'eventNotificationDetail' => [
-                        'aggregationType' => 'PER_SHIPMENT',
-                        'personalMessage' => $data['ship_notify_message'] ?? 'Your shipment has been processed.',
-                        'eventNotifications' => [
-                            [
-                                'role' => 'SHIPPER',
-                                'events' => ['ON_SHIPMENT'],
-                                'notificationDetail' => [
-                                    'notificationType' => 'EMAIL',
-                                    'emailDetail' => [
-                                        'emailAddress' => $data['ship_notify_email'] ?? '',
-                                        'name' => $data['ship_notify_contact_name'] ?? '',
-                                        'notificationEventType' => ['ON_SHIPMENT'],
-                                        'format' => 'HTML',
-                                        'localization' => [
-                                            'languageCode' => $data['ship_notify_language'] ?? 'en',
-                                            'localeCode' => $data['ship_notify_dialect'] ?? 'US'
-                                        ]
-                                    ]
-                                ],
-                                'formatSpecification' => [
-                                    'type' => 'HTML'
-                                ]
-                            ]
-                        ]
-                    ]
-                ]
-            );
-        }
-        // 如果是国际订单，添加商业发票和形式发票信息，清关费由客户支付
-        if ($this->isInternationalShipment($data['shipper']['address']['countryCode'], $formattedAddress['address']['countryCode'])) {
-            $requestedShipment['customsClearanceDetail'] = [
-                'dutiesPayment' => [
-                    'paymentType' => 'RECIPIENT' // 默认收货方支付清关税
-                ],
-                'commodities' => $this->prepareCommodities($data),
-                'customsValue' => [
-                    'currency' => $this->mapCurrencyCode($data['InvoiceCurrencyCode'] ?? 'USD'),
-                    'amount' => $data['customsValue'] ?? 0
-                ],
-                'reasonForExport' => $this->mapReasonForExport($data['InvoiceReasonForExport'] ?? 'SALE')
-            ];
-
-            // 如果特别指定清关税支付方
-            if (!empty($data['duties_payment_type'])) {
-                switch ($data['duties_payment_type']) {
-                    case 'SHIPPER':
-                        $requestedShipment['customsClearanceDetail']['dutiesPayment']['paymentType'] = 'SENDER';
-                        break;
-                    case 'THIRD_PARTY':
-                        if (!empty($data['third_party_account'])) {
-                            $requestedShipment['customsClearanceDetail']['dutiesPayment'] = [
-                                'paymentType' => 'THIRD_PARTY',
-                                'payor' => [
-                                    'responsibleParty' => [
-                                        'accountNumber' => [
-                                            'value' => $data['third_party_account']
-                                        ],
-                                        'address' => [
-                                            'streetLines' => $formattedAddress['shipper']['address']['streetLines'],
-                                            'city' => $formattedAddress['shipper']['address']['city'],
-                                            'stateOrProvinceCode' => $formattedAddress['shipper']['address']['stateOrProvinceCode'],
-                                            'postalCode' => $formattedAddress['shipper']['address']['postalCode'],
-                                            'countryCode' => $formattedAddress['shipper']['address']['countryCode']
-                                        ]
-                                    ]
-                                ]
-                            ];
-                        }
-                        break;
-                }
-            }
-
-            // 添加商业发票和形式发票文档
-            $requestedShipment['shippingDocumentSpecification'] = [
-                'shippingDocumentTypes' => ['COMMERCIAL_INVOICE', 'PRO_FORMA_INVOICE'],
-                'commercialInvoiceDetail' => [
-                    'documentFormat' => [
-                        'dispositions' => [
-                            [
-                                'dispositionType' => 'EMAILED',
-                                'emailDetail' => [
-                                    'emailRecipients' => [
-                                        [
-                                            'emailAddress' => $data['shipper']['contact']['emailAddress'] ?? '',
-                                            'emailAddressType' => 'SHIPPER'
-                                        ]
-                                    ]
-                                ]
-                            ],
-                            [
-                                'dispositionType' => 'PRINTED', // 添加打印选项
-                                'emailDetail' => [
-                                    'emailRecipients' => [
-                                        [
-                                            'emailAddress' => $data['shipper']['contact']['emailAddress'] ?? '',
-                                            'emailAddressType' => 'SHIPPER'
-                                        ]
-                                    ]
-                                ]
-                            ]
-                        ]
-                    ]
-                ]
-            ];
-
-            // 如果进口商信息与收货人不同，添加进口商信息
-            if (!empty($data['importer']) && $this->isImporterDifferent($data['importer'], $formattedAddress['recipient'])) {
-                $requestedShipment['customsClearanceDetail']['importerOfRecord'] = [
-                    'contact' => [
-                        'personName' => $data['importer']['contact']['personName'],
-                        'phoneNumber' => $data['importer']['contact']['phoneNumber'],
-                        'emailAddress' => $data['importer']['contact']['emailAddress']
-                    ],
-                    'address' => [
-                        'streetLines' => $data['importer']['address']['streetLines'],
-                        'city' => $data['importer']['address']['city'],
-                        'stateOrProvinceCode' => $data['importer']['address']['stateOrProvinceCode'],
-                        'postalCode' => $data['importer']['address']['postalCode'],
-                        'countryCode' => $data['importer']['address']['countryCode']
-                    ],
-                    'accountNumber' => [
-                        'value' => $data['importer']['account_number'] ?? ''
-                    ],
-                    'tins' => [
-                        [
-                            'number' => $data['importer']['tax_id'] ?? '',
-                            'tinType' => 'BUSINESS_NATIONAL'
-                        ],
-                        [
-                            'number' => $data['importer']['vat_number'] ?? '',
-                            'tinType' => 'BUSINESS_VAT'
-                        ]
-                    ]
-                ];
-            }
-        }
-
-        return [
-            'requestedShipment' => $requestedShipment,
-            'accountNumber' => ['value' => $data['account_number']],
-            'labelResponseOptions' => 'URL_ONLY',
-        ];
-    }
-
     private function isInternationalShipment(string $shipperCountry, string $recipientCountry): bool
     {
         return $shipperCountry !== $recipientCountry;
     }
-
-    private function prepareCommodities(array $data): array
-    {
-        $commodities = [];
-
-        if (isset($data['items']) && is_array($data['items'])) {
-            foreach ($data['items'] as $item) {
-                $commodities[] = [
-                    'description' => $item['description'] ?? '',
-                    'quantity' => $item['quantity'] ?? 1,
-                    'quantityUnits' => 'PCS',
-                    'unitPrice' => [
-                        'currency' => $data['currency'] ?? 'USD',
-                        'amount' => $item['unitPrice'] ?? 0
-                    ],
-                    'customsValue' => [
-                        'currency' => $data['currency'] ?? 'USD',
-                        'amount' => ($item['unitPrice'] ?? 0) * ($item['quantity'] ?? 1)
-                    ],
-                    'weight' => [
-                        'units' => 'LB',
-                        'value' => $item['weight'] ?? 0
-                    ],
-                    'harmonizedCode' => $item['harmonizedCode'] ?? '',
-                    'countryOfManufacture' => $item['countryOfManufacture'] ?? $data['shipper']['address']['countryCode'] ?? 'US'
-                ];
-            }
-        } else {
-            // 如果没有详细商品信息，使用默认值
-            $commodities[] = [
-                'description' => $data['description'] ?? 'General Merchandise',
-                'quantity' => 1,
-                'quantityUnits' => 'PCS',
-                'unitPrice' => [
-                    'currency' => $data['currency'] ?? 'USD',
-                    'amount' => $data['customsValue'] ?? 0
-                ],
-                'customsValue' => [
-                    'currency' => $data['currency'] ?? 'USD',
-                    'amount' => $data['customsValue'] ?? 0
-                ],
-                'weight' => [
-                    'units' => 'LB',
-                    'value' => $data['weight'] ?? 0
-                ],
-                'harmonizedCode' => $data['harmonizedCode'] ?? '',
-                'countryOfManufacture' => $data['countryOfManufacture'] ?? $data['shipper']['address']['countryCode'] ?? 'US'
-            ];
-        }
-
-        return $commodities;
-    }
-
     private function prepareRateData(array $data): array
     {
         // 获取默认发件人信息
