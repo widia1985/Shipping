@@ -3,22 +3,16 @@
 namespace Widia\Shipping\Payloads\FedEx;
 
 use Widia\Shipping\Address\AddressFormatter;
+use Widia\Shipping\Payloads\FedEx\Traits\Common;
 class ShipmentPayloads
 {
+    use Common;
     protected $addressFormatter;
     protected $formatAddress;
-    protected $mapServiceType;
-    protected $mapSignatureType;
     public function __construct(
-        AddressFormatter $addressFormatter,
-        callable $formatAddress,
-        callable $mapServiceType,
-        callable $mapSignatureType
+        AddressFormatter $addressFormatter
     ) {
         $this->addressFormatter = $addressFormatter;
-        $this->formatAddress = $formatAddress;
-        $this->mapServiceType = $mapServiceType;
-        $this->mapSignatureType = $mapSignatureType;
     }
     public function build(array $data, $returnShipment = false): array
     {
@@ -33,10 +27,10 @@ class ShipmentPayloads
         }
         $packages = self::buildPackages($data['packages'], $returnShipment);
         $requestedShipment = [
-            'shipper' => call_user_func($this->formatAddress, $data['shipper']),
-            'recipients' => [call_user_func($this->formatAddress, $formattedAddress)],
+            'shipper' => $this->formatAddress($data['shipper']),
+            'recipients' => [$this->formatAddress($formattedAddress)],
             'pickupType' => 'USE_SCHEDULED_PICKUP',
-            'serviceType' => call_user_func($this->mapServiceType, $formattedAddress['service_type']),
+            'serviceType' => $this->mapServiceType($formattedAddress['service_type']),
             'packagingType' => 'YOUR_PACKAGING',
             'totalPackageCount' => count($packages),
             'requestedPackageLineItems' => $packages,
@@ -140,7 +134,7 @@ class ShipmentPayloads
             foreach ($shipment['requestedPackageLineItems'] as $index => $package) {
                 $shipment['requestedPackageLineItems'][$index]['packageSpecialServices'] = [
                     'specialServiceTypes' => ['SIGNATURE_OPTION'],
-                    'signatureOptionType' => call_user_func($this->mapSignatureType, $data['signature_type'] ?? 'DIRECT'),
+                    'signatureOptionType' => $this->mapSignatureType($data['signature_type'] ?? 'DIRECT')
                 ];
             }
         }
@@ -308,20 +302,6 @@ class ShipmentPayloads
         ];
 
         return $shipment;
-    }
-    private function isInternationalShipment(string $shipperCountry, string $recipientCountry): bool
-    {
-        return $shipperCountry !== $recipientCountry;
-    }
-    private function isImporterDifferent(array $importer, array $recipient): bool
-    {
-        // 检查进口商和收货人是否相同
-        return $importer['contact']['personName'] !== $recipient['contact']['personName'] ||
-            $importer['address']['streetLines'] !== $recipient['address']['streetLines'] ||
-            $importer['address']['city'] !== $recipient['address']['city'] ||
-            $importer['address']['stateOrProvinceCode'] !== $recipient['address']['stateOrProvinceCode'] ||
-            $importer['address']['postalCode'] !== $recipient['address']['postalCode'] ||
-            $importer['address']['countryCode'] !== $recipient['address']['countryCode'];
     }
     private function prepareCommodities(array $data): array
     {
