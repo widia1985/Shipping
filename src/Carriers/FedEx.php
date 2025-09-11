@@ -277,7 +277,9 @@ class FedEx extends AbstractCarrier
                 'includeDetailedScans' => true,
                 'trackingInfo' => [
                     [
-                        'trackingNumber' => $trackingNumber,
+                        'trackingNumberInfo' => [
+                            "trackingNumber" => $trackingNumber
+                        ],
                     ],
                 ],
             ],
