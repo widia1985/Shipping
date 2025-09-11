@@ -9,6 +9,8 @@ use Carbon\Carbon;
 use Widia\Shipping\Models\ShippingLabel;
 use Widia\Shipping\Payloads\FedEx\ShipmentPayloads;
 use Widia\Shipping\Payloads\FedEx\RatePayloads;
+use Widia\Shipping\Payloads\FedEx\CancelPayloads;
+
 class FedEx extends AbstractCarrier
 {
     protected $test_url = 'https://apis-sandbox.fedex.com';
@@ -27,9 +29,10 @@ class FedEx extends AbstractCarrier
     protected $markup = 0;
     protected $shipmentPayloads;
     protected $ratePayloads;
+    protected $cancelPayloads;
     public function __construct()
     {
-        //$this->client = new Client();
+
     }
     /*public function setAccount(string $accountName): void
     {
@@ -164,7 +167,7 @@ class FedEx extends AbstractCarrier
     {
         $this->validateToken();
         $payload = $this->shipmentPayloads->build($data);
-        $result = $this->sendApiRequest('/ship/v1/shipments', $payload, $data);
+        $result = $this->sendApiRequest('post','/ship/v1/shipments', $payload, );
         $this->saveLabelInfo($data, $result);
         return $result;
     }
@@ -172,28 +175,44 @@ class FedEx extends AbstractCarrier
     {
         $this->validateToken();
         $payload = $this->shipmentPayloads->build($data, true);
-        $result = $this->sendApiRequest('/ship/v1/shipments', $payload, $data);
+        $result = $this->sendApiRequest('post','/ship/v1/shipments', $payload);
         $this->saveLabelInfo($data, $result);
         return $result;
+    }
+    public function cancelLabel(string $trackingNumber): bool
+    {
+        $this->cancelPayloads = new CancelPayloads();
+        $this->validateToken();
+        $payload = $this->cancelPayloads->build($this->carrierAccount, $trackingNumber);
+        $result = $this->sendApiRequest('put', '/ship/v1/shipments/cancel', $payload);
+        return $result['output']['cancelledShipment'];
     }
     public function getRates(array $data): array
     {
         $this->validateToken();
         $payload = $this->ratePayloads->build($data);
-        return $this->sendApiRequest('/rate/v1/rates/quotes', $payload, $data);
+        return $this->sendApiRequest('post', '/rate/v1/rates/quotes', $payload);
     }
-    private function sendApiRequest(string $endpoint, array $payload, array $data): array
+    private function sendApiRequest(string $method, string $endpoint, array $payload): array
     {
         try {
-            $response = $this->client->post($endpoint, ['json' => $payload]);
+            switch ($method) {
+                case 'post':
+                    $response = $this->client->post($endpoint, ['json' => $payload]);
+                    break;
+                case 'put':
+                    $response = $this->client->put($endpoint, ['json' => $payload]);
+                    break;
+            }
             $result = json_decode($response->getBody()->getContents(), true);
+            return $result;
         } catch (GuzzleException $e) {
             $body = $e->getResponse()->getBody();
             $errorResponse = json_decode($body, true);
             dd($errorResponse);
             throw new \Exception('Failed to get FedEx rates: ' . $e->getMessage());
         }
-        return $result;
+        return false;
     }
     public function validateAddress(array $address): array
     {
@@ -246,19 +265,6 @@ class FedEx extends AbstractCarrier
         ]);
 
         return json_decode($response->getBody()->getContents(), true);
-    }
-    public function cancelLabel(string $trackingNumber): bool
-    {
-        if (!$this->token) {
-            throw new \Exception('FedEx account not set');
-        }
-
-        try {
-            $response = $this->client->delete("/ship/v1/labels/{$trackingNumber}");
-            return $response->getStatusCode() === 200;
-        } catch (GuzzleException $e) {
-            throw new \Exception('Failed to cancel FedEx label: ' . $e->getMessage());
-        }
     }
     private function saveLabelInfo(array $data, array $response): void
     {
