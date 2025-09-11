@@ -2,6 +2,31 @@
 namespace Widia\Shipping\Payloads\FedEx\Traits;
 trait Common
 {
+    private function initAddress(array $data): array
+    {
+
+        $defaultShipper = config('shipping.default_shipper');
+        $data['shipper'] = array_merge($defaultShipper, $data['shipper'] ?? []);
+
+        $recipient = $data['recipient'] ?? $data['return_address'];
+        $formattedAddress = $this->addressFormatter->format($recipient, $data['service_type']);
+
+        if (isset($recipient['contact'])) {
+            $formattedAddress['contact'] = $recipient['contact'];
+        }
+
+        return [$data['shipper'], $formattedAddress];
+    }
+
+    private function getLabelSpecification(): array
+    {
+        return [
+            'imageType' => 'PDF',
+            'labelStockType' => 'PAPER_4X6'
+        ];
+    }
+
+
     private function isImporterDifferent(array $importer, array $recipient): bool
     {
         return $importer['contact']['personName'] !== $recipient['contact']['personName']
@@ -53,7 +78,6 @@ trait Common
             ];
             return in_array($serviceType, $internationalMapping) ? $serviceType : 'INTERNATIONAL_ECONOMY';
         }
-
         // 国内运输服务类型映射
         $domesticMapping = [
             'FIRST_OVERNIGHT',
@@ -66,7 +90,8 @@ trait Common
             'FEDEX_1_DAY_FREIGHT',
             'FEDEX_2_DAY_FREIGHT',
             'FEDEX_3_DAY_FREIGHT',
-            'SMART_POST'
+            'SMART_POST',
+            'THIRD_PARTY_CONSIGNEE',
         ];
         // 如果找到匹配的国内服务类型，返回它
         if (in_array($serviceType, $domesticMapping)) {
@@ -144,29 +169,227 @@ trait Common
 
         return $mapping[strtoupper($currency)] ?? 'USD'; // 默认返回 USD
     }
-    private function formatAddress(array $address): array
+    private function returnShipment(array $shipment, array $data): array
     {
-        $formattedAddress = [
-            'contact' => [
-                'personName' => $address['contact']['personName'],
-                'phoneNumber' => $address['contact']['phoneNumber'],
-                'emailAddress' => $address['contact']['emailAddress']
+        if (isset($data['recipient'])) {
+            $recipient = $data['recipient'];
+        } else {
+            $recipient = $data['return_address'];
+        }
+        $shipment['shipmentSpecialServices'] = [
+            'specialServiceTypes' => [
+                'RETURN_SHIPMENT'
             ],
-            'address' => [
-                'streetLines' => $address['address']['streetLines'],
-                'city' => $address['address']['city'],
-                'stateOrProvinceCode' => $address['address']['stateOrProvinceCode'],
-                'postalCode' => $address['address']['postalCode'],
-                'countryCode' => $address['address']['countryCode'],
-                'residential' => $address['address']['isResidential']
+            'returnShipmentDetail' => [
+                'returnEmailDetail' => [
+                    'merchantPhoneNumber' => $recipient['contact']['phoneNumber'],
+                ],
+                'rma' => [
+                    'reason' => $data['return_reason'] ?? 'none'
+                ],
+                'returnType' => 'PENDING',
+            ],
+            'pendingShipmentDetail' => [
+                'pendingShipmentType' => 'EMAIL',
+                'emailLabelDetail' => [
+                    'recipient' => [
+                        [
+                            'emailAddress' => $recipient['contact']['emailAddress'],
+                            'role' => 'SHIPMENT_COMPLETOR',
+                        ]
+                    ]
+                ],
+                'expirationTimeStamp' => $data['expiration_time'] ??''
             ]
+
         ];
 
-        // 如果是住宅地址，确保使用 HOME_DELIVERY 服务
-        if ($address['address']['isResidential'] && $address['address']['countryCode'] === 'US') {
-            $formattedAddress['serviceType'] = 'HOME_DELIVERY';
+        return $shipment;
+    }
+    private function applyExtraOptions(array $shipment, array $data, array $recipient): array
+    {
+        // Department notes
+        // if (!empty($data['DepartmentNotes'])) {
+        //     $shipment['departmentNotes'] = $data['DepartmentNotes'];
+        // }
+
+        // Reference
+        if (!empty($data['Reference'])) {
+            // $shipment['shipmentSpecialServices']['specialServiceTypes'][] = 'REFERENCE';
+            $shipment['shipmentSpecialServices']['reference'] = [
+                'referenceType' => 'CUSTOMER_REFERENCE',
+                'value' => $data['Reference']
+            ];
         }
 
-        return $formattedAddress;
+        // Signature
+        if (!empty($data['signature_required'])) {
+            foreach ($shipment['requestedPackageLineItems'] as $index => $package) {
+                $shipment['requestedPackageLineItems'][$index]['packageSpecialServices'] = [
+                    'specialServiceTypes' => ['SIGNATURE_OPTION'],
+                    'signatureOptionType' => $this->mapSignatureType($data['signature_type'] ?? 'DIRECT')
+                ];
+            }
+        }
+        // Notification
+        if (!empty($data['ship_notify'])) {
+
+            foreach ($data['ship_notify'] as $notify) {
+                if (empty($notify['ship_notify_email']))
+                    continue;
+
+                $shipment['emailNotificationDetail']['aggregationType'] = "PER_PACKAGE";
+                $shipment['emailNotificationDetail']['emailNotificationRecipients'][] = [
+                    "name" => $recipient['contact']['personName'],
+                    "emailNotificationRecipientType" => "SHIPPER",
+                    "emailAddress" => $notify["ship_notify_email"],
+                    "notificationFormatType" => "TEXT",
+                    "notificationType" => "EMAIL",
+                    "locale" => "en_US",
+                    "notificationEventType" => [
+                        "ON_PICKUP_DRIVER_ARRIVED",
+                        "ON_SHIPMENT"
+                    ]
+                ];
+            }
+
+        }
+
+        // 國際訂單邏輯
+        if (
+            !empty($data['shipper']['address']['countryCode']) &&
+            $this->isInternationalShipment($data['shipper']['address']['countryCode'], $recipient['address']['countryCode'])
+        ) {
+            $shipment['customsClearanceDetail'] = [
+                'dutiesPayment' => [
+                    'paymentType' => 'RECIPIENT' // 默认收货方支付清关税
+                ],
+                'commodities' => $this->prepareCommodities($data),
+            ];
+
+            // 如果特别指定清关税支付方
+            if (!empty($data['duties_payment_type'])) {
+                switch ($data['duties_payment_type']) {
+                    case 'SHIPPER':
+                        $shipment['customsClearanceDetail']['dutiesPayment']['paymentType'] = 'SENDER';
+                        break;
+                    case 'THIRD_PARTY':
+                        if (!empty($data['third_party_account'])) {
+                            $shipment['customsClearanceDetail']['dutiesPayment'] = [
+                                'paymentType' => 'THIRD_PARTY',
+                                'payor' => [
+                                    'responsibleParty' => [
+                                        'accountNumber' => [
+                                            'value' => $data['third_party_account']
+                                        ],
+                                        'address' => [
+                                            'streetLines' => $shipment['shipper']['address']['streetLines'],
+                                            'city' => $shipment['shipper']['address']['city'],
+                                            'stateOrProvinceCode' => $shipment['shipper']['address']['stateOrProvinceCode'],
+                                            'postalCode' => $shipment['shipper']['address']['postalCode'],
+                                            'countryCode' => $shipment['shipper']['address']['countryCode']
+                                        ]
+                                    ]
+                                ]
+                            ];
+                        }
+                        break;
+                }
+            }
+
+            // 添加商业发票和形式发票文档
+            $shipment['shippingDocumentSpecification'] = [
+                'shippingDocumentTypes' => ['COMMERCIAL_INVOICE', 'PRO_FORMA_INVOICE'],
+                'commercialInvoiceDetail' => [
+                    'documentFormat' => [
+                        'dispositions' => [
+                            [
+                                'dispositionType' => 'EMAILED',
+                                'emailDetail' => [
+                                    'emailRecipients' => [
+                                        [
+                                            'emailAddress' => $data['shipper']['contact']['emailAddress'] ?? '',
+                                            'emailAddressType' => 'SHIPPER'
+                                        ]
+                                    ]
+                                ]
+                            ],
+                            [
+                                'dispositionType' => 'PRINTED', // 添加打印选项
+                                'emailDetail' => [
+                                    'emailRecipients' => [
+                                        [
+                                            'emailAddress' => $data['shipper']['contact']['emailAddress'] ?? '',
+                                            'emailAddressType' => 'SHIPPER'
+                                        ]
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ];
+
+            // 如果进口商信息与收货人不同，添加进口商信息
+            if (!empty($data['importer']) && $this->isImporterDifferent($data['importer'], $recipient)) {
+                $shipment['customsClearanceDetail']['importerOfRecord'] = [
+                    'contact' => [
+                        'personName' => $data['importer']['contact']['personName'],
+                        'phoneNumber' => $data['importer']['contact']['phoneNumber'],
+                        'emailAddress' => $data['importer']['contact']['emailAddress']
+                    ],
+                    'address' => [
+                        'streetLines' => $data['importer']['address']['streetLines'],
+                        'city' => $data['importer']['address']['city'],
+                        'stateOrProvinceCode' => $data['importer']['address']['stateOrProvinceCode'],
+                        'postalCode' => $data['importer']['address']['postalCode'],
+                        'countryCode' => $data['importer']['address']['countryCode']
+                    ],
+                    'accountNumber' => [
+                        'value' => $data['importer']['account_number'] ?? ''
+                    ],
+                    'tins' => [
+                        [
+                            'number' => $data['importer']['tax_id'] ?? '',
+                            'tinType' => 'BUSINESS_NATIONAL'
+                        ],
+                        [
+                            'number' => $data['importer']['vat_number'] ?? '',
+                            'tinType' => 'BUSINESS_VAT'
+                        ]
+                    ]
+                ];
+            }
+        }
+
+        return $shipment;
+    }
+    private function buildPaymentDetail(array $data, array $shipper, string $defaultType = 'SENDER'): array
+    {
+        $paymentType = $data['third_party_account'] ?? false
+            ? 'THIRD_PARTY'   // 如果使用第三方帳戶，請新增第三方帳戶資訊
+            : ($data['duties_payment_type'] ?? $defaultType);
+
+        $accountNumber = $paymentType === 'THIRD_PARTY'
+            ? $data['third_party_account']
+            : $data['account_number'];
+
+        $payor = [
+            'responsibleParty' => [
+                'accountNumber' => ['value' => $accountNumber]
+            ]
+        ];
+        
+        // RECIPIENT / THIRD_PARTY / COLLECT 都必須帶 address
+        if (in_array($paymentType, ['RECIPIENT', 'THIRD_PARTY', 'COLLECT'])) {
+            $payor['responsibleParty']['address'] = $shipper['address'];
+        } else {
+            // $payor['address'] = $shipper['address'];
+        }
+
+        return [
+            'paymentType' => $paymentType,
+            'payor' => $payor
+        ];
     }
 }

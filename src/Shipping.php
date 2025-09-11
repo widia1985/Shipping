@@ -19,6 +19,7 @@ class Shipping
         'fedex' => FedEx::class,
         'ups' => UPS::class
     ];
+    protected $carrierName = null;
 
     /**
      * @param string $carrier
@@ -27,12 +28,14 @@ class Shipping
      */
     public function setCarrier(array $carrierconfig): self
     {
+        
         if (!is_array($carrierconfig)) {
             throw new CarrierNotFoundException("Carrier '{$carrier}' not found");
         }
 
         foreach($carrierconfig as $carrierName => $carrierInfo) {
             $carrierClassName = $this->carriers[strtolower($carrierName)] ?? null;
+            $this->carrierName = $carrierName;
             if (!class_exists($carrierClassName)) {
                 throw new CarrierNotFoundException("Carrier class '{$carrierClassName}' does not exist");
             }
@@ -59,7 +62,6 @@ class Shipping
             if ($carrierAccountNumber && method_exists($this->carrier, 'setCarrierAccount')) {
                 $this->carrier->setCarrierAccount($carrierAccountNumber);
             }
-
             $account = config('shipping.'.$carrierAccountName.'.account_number') ?? null;
             $markup = config('shipping.'.$carrierAccountName.'.markup') ?? null;
             if($markup != null && method_exists($this->carrier, 'setMarkup')){
@@ -237,5 +239,20 @@ class Shipping
         }
 
         return $this->carrier->validateAddresstoResponse($data);
+    }
+    public function createReturnLabel(array $data)
+    {
+        if (!$this->carrier) {
+            throw new InvalidCarrierException('No carrier selected');
+        }
+
+        return $this->carrier->createReturnLabel($data);
+    }
+    public function createTag(array $data)
+    {
+        if (empty($this->carrierName) && $this->carrierName != 'fedex') {
+            throw new CarrierNotFoundException('This carrier is not available for this method');
+        }
+        return $this->carrier->createTag($data);
     }
 } 

@@ -10,6 +10,7 @@ use Widia\Shipping\Models\ShippingLabel;
 use Widia\Shipping\Payloads\FedEx\ShipmentPayloads;
 use Widia\Shipping\Payloads\FedEx\RatePayloads;
 use Widia\Shipping\Payloads\FedEx\CancelPayloads;
+use Widia\Shipping\Payloads\FedEx\TagPayloads;
 
 class FedEx extends AbstractCarrier
 {
@@ -30,6 +31,7 @@ class FedEx extends AbstractCarrier
     protected $shipmentPayloads;
     protected $ratePayloads;
     protected $cancelPayloads;
+    protected $tagPayloads;
     public function __construct()
     {
 
@@ -100,6 +102,9 @@ class FedEx extends AbstractCarrier
         $this->ratePayloads = new RatePayloads(
             $this->addressFormatter
         );
+        $this->tagPayloads = new TagPayloads(
+            $this->addressFormatter
+        );
 
         return $this;
     }
@@ -167,7 +172,7 @@ class FedEx extends AbstractCarrier
     {
         $this->validateToken();
         $payload = $this->shipmentPayloads->build($data);
-        $result = $this->sendApiRequest('post','/ship/v1/shipments', $payload, );
+        $result = $this->sendApiRequest('post', '/ship/v1/shipments', $payload);
         $this->saveLabelInfo($data, $result);
         return $result;
     }
@@ -175,7 +180,7 @@ class FedEx extends AbstractCarrier
     {
         $this->validateToken();
         $payload = $this->shipmentPayloads->build($data, true);
-        $result = $this->sendApiRequest('post','/ship/v1/shipments', $payload);
+        $result = $this->sendApiRequest('post', '/ship/v1/shipments', $payload);
         $this->saveLabelInfo($data, $result);
         return $result;
     }
@@ -186,6 +191,13 @@ class FedEx extends AbstractCarrier
         $payload = $this->cancelPayloads->build($this->carrierAccount, $trackingNumber);
         $result = $this->sendApiRequest('put', '/ship/v1/shipments/cancel', $payload);
         return $result['output']['cancelledShipment'];
+    }
+    public function createTag($data): array
+    {
+        $this->validateToken();
+        $payload = $this->tagPayloads->build($data);
+        $result = $this->sendApiRequest('post', '/ship/v1/shipments/tag', $payload);
+        return $result;
     }
     public function getRates(array $data): array
     {
