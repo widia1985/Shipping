@@ -192,14 +192,14 @@ trait Common
             'pendingShipmentDetail' => [
                 'pendingShipmentType' => 'EMAIL',
                 'emailLabelDetail' => [
-                    'recipient' => [
+                    'recipients' => [
                         [
                             'emailAddress' => $recipient['contact']['emailAddress'],
                             'role' => 'SHIPMENT_COMPLETOR',
                         ]
                     ]
                 ],
-                'expirationTimeStamp' => $data['expiration_time'] ??''
+                'expirationTimeStamp' => $data['expiration_time'],
             ]
 
         ];
