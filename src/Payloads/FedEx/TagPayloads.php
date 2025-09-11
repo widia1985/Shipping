@@ -112,4 +112,19 @@ class TagPayloads
 
         return $result;
     }
+    public function cancel(array $data): array
+    {
+        return [
+            'accountNumber' => ['value' => $data['account_number']],
+            "serviceType" => "PRIORITY_OVERNIGHT",
+            "trackingNumber" => $data['trackingNumber'],
+            "completedTagDetail" => [
+                "confirmationNumber" => "275",
+                "location" => "NQAA",
+                "dispatchDate" => "2019-08-03"
+            ]
+        ];
+    }
+
+
 }

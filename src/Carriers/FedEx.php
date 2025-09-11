@@ -199,6 +199,13 @@ class FedEx extends AbstractCarrier
         $result = $this->sendApiRequest('post', '/ship/v1/shipments/tag', $payload);
         return $result;
     }
+    public function cancelTag($data): bool
+    {
+        $this->validateToken();
+        $payload = $this->tagPayloads->cancel($data);
+        $result = $this->sendApiRequest('put', '/ship/v1/shipments/tag/cancel', $payload);
+        return $result['output']['cancelledTag'];
+    }
     public function getRates(array $data): array
     {
         $this->validateToken();
