@@ -15,20 +15,25 @@ class ShipmentPayloads
     }
     public function build(array $data, $returnShipment = false): array
     {
-        [$shipper, $recipient] = $this->initAddress($data);
-        $packages = $this->buildPackages($data['packages'], $returnShipment);
+        [$shipper, $recipient] = $this->formatAddress($data, $returnShipment);
+        $packages = $data['packages'] ?? $data['package'];
+        $packages = $this->buildPackages($packages, $returnShipment);
+
+        // 如果是住宅地址，确保使用 HOME_DELIVERY 服务
+        if (!$returnShipment && $recipient['address']['residential'] && $recipient['address']['countryCode'] === 'US') {
+            $data['service_type'] = 'HOME_DELIVERY';
+        }
         $requestedShipment = [
-            'shipper' => $this->formatAddress($shipper),
-            'recipients' => [$this->formatAddress($recipient)],
+            'shipper' => $shipper,
+            'recipients' => [$recipient],
             'pickupType' => 'USE_SCHEDULED_PICKUP',
-            'serviceType' => $this->mapServiceType($recipient['service_type']),
+            'serviceType' => $this->mapServiceType($data['service_type'], $recipient),
             'packagingType' => 'YOUR_PACKAGING',
             'totalPackageCount' => count($packages),
             'requestedPackageLineItems' => $packages,
             'labelSpecification' => $this->getLabelSpecification(),
             'shippingChargesPayment' => $this->buildPaymentDetail($data, $shipper),
         ];
-
         //創建退貨標籤
         if ($returnShipment) {
             $requestedShipment = $this->returnShipment($requestedShipment, $data);
@@ -44,30 +49,33 @@ class ShipmentPayloads
             'labelResponseOptions' => 'URL_ONLY',
         ];
     }
-    private function formatAddress(array $address): array
+    private function formatAddress(array $data, $returnShipment): array
     {
-        $formattedAddress = [
-            'contact' => [
-                'personName' => $address['contact']['personName'],
-                'phoneNumber' => $address['contact']['phoneNumber'],
-                'emailAddress' => $address['contact']['emailAddress']
-            ],
-            'address' => [
-                'streetLines' => $address['address']['streetLines'],
-                'city' => $address['address']['city'],
-                'stateOrProvinceCode' => $address['address']['stateOrProvinceCode'],
-                'postalCode' => $address['address']['postalCode'],
-                'countryCode' => $address['address']['countryCode'],
-                'residential' => $address['address']['isResidential']
-            ]
-        ];
+        $shipper = $data['shipper'];
+        $recipient = $data['recipient'] ?? $data['return_address'];
 
-        // 如果是住宅地址，确保使用 HOME_DELIVERY 服务
-        if ($address['address']['isResidential'] && $address['address']['countryCode'] === 'US') {
-            $formattedAddress['serviceType'] = 'HOME_DELIVERY';
+        if (isset($shipper['address']['isResidential'])) {
+            $shipper['address']['residential'] = $shipper['address']['isResidential'];
+            unset($shipper['address']['isResidential']);
+        }
+        if (isset($recipient['address']['isResidential'])) {
+            $recipient['address']['residential'] = $recipient['address']['isResidential'];
+            unset($recipient['address']['isResidential']);
         }
 
-        return $formattedAddress;
+        if ($returnShipment) {
+            // 在退貨 (RETURN_SHIPMENT + PENDING/EMAIL) 場景時，API 會做更嚴格的驗證。
+            unset($shipper['contact']['emailAddress']);
+            unset($recipient['contact']['emailAddress']);
+            unset($shipper['address']['residential']);
+            unset($recipient['address']['residential']);
+            $shipper['contact']['companyName'] = $address['contact']['companyName'] ?? 'N/A';
+            $recipient['contact']['companyName'] = $address['contact']['companyName'] ?? 'N/A';
+            if (count($recipient['address']['streetLines']) < 2) {
+                $recipient['address']['streetLines'][] = 'N/A';
+            }
+        }
+        return [$shipper, $recipient];
     }
     private function buildPackages(array $packages, $returnShipment): array
     {

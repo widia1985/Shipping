@@ -55,7 +55,7 @@ trait Common
 
         return $mapping[$type] ?? 'DIRECT'; // 默认需要直接签名
     }
-    private function mapServiceType(string $serviceType): string
+    private function mapServiceType(string $serviceType, array $recipient): string
     {
         if (empty($serviceType) || !is_string($serviceType)) {
             $serviceType = 'GROUND SERVICE';
@@ -64,8 +64,8 @@ trait Common
         $serviceType = $this->normalizeServiceType($serviceType);
 
         // 获取收件人国家代码和住宅地址标志
-        $recipientCountry = $this->addressFormatter->getCountryCode() ?? '';
-        $isResidential = $this->addressFormatter->isResidential() ?? false;
+        $recipientCountry = $recipient['address']['countryCode'] ?? '';
+        $isResidential = (isset($recipient['address']['residential'])) ? $recipient['address']['residential'] : false;
         $isInternational = $recipientCountry !== 'US';
 
         // 国际运输服务类型映射
@@ -187,6 +187,11 @@ trait Common
                 'rma' => [
                     'reason' => $data['return_reason'] ?? 'none'
                 ],
+                'returnAssociationDetail' => [
+                    // 'shipDatestamp' => $data['return_reason'],
+                    'trackingNumber' => $data['original_tracking_number'],
+                    'shipDatestamp'=> $data['ship_datestamp'],
+                ],
                 'returnType' => 'PENDING',
             ],
             'pendingShipmentDetail' => [
@@ -196,6 +201,9 @@ trait Common
                         [
                             'emailAddress' => $recipient['contact']['emailAddress'],
                             'role' => 'SHIPMENT_COMPLETOR',
+                            //有效值：SHIPMENT_COMPLETOR，SHIPMENT_INITIATOR
+                            //SHIPMENT_COMPLETOR → 完成貨件的人（通常是實際會 列印標籤並寄出 的收件人）。
+                            //SHIPMENT_INITIATOR → 建立貨件的人（通常是 建立寄件請求 的人）。
                         ]
                     ]
                 ],
@@ -379,7 +387,7 @@ trait Common
                 'accountNumber' => ['value' => $accountNumber]
             ]
         ];
-        
+
         // RECIPIENT / THIRD_PARTY / COLLECT 都必須帶 address
         if (in_array($paymentType, ['RECIPIENT', 'THIRD_PARTY', 'COLLECT'])) {
             $payor['responsibleParty']['address'] = $shipper['address'];
