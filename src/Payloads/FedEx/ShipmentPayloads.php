@@ -15,20 +15,22 @@ class ShipmentPayloads
     }
     public function build(array $data, $returnShipment = false): array
     {
-        [$shipper, $recipient] = $this->formatAddress($data, $returnShipment);
-        $packages = $data['packages'] ?? $data['package'];
-        $packages = $this->buildPackages($packages, $returnShipment);
 
+        [$shipper, $recipient] = $this->formatAddress($data, $returnShipment);
+        $data['service_type'] = $this->mapServiceType($data['service_type'], $recipient);
+
+        $packages = $data['packages'] ?? $data['package'];
+        $packages = $this->buildPackages($data['service_type'], $packages, $returnShipment);
         // 如果是住宅地址，确保使用 HOME_DELIVERY 服务
-        if (!$returnShipment && $recipient['address']['residential'] && $recipient['address']['countryCode'] === 'US') {
-            $data['service_type'] = 'HOME_DELIVERY';
-        }
+        // if (!$returnShipment && $recipient['address']['residential'] && $recipient['address']['countryCode'] === 'US') {
+        //     $data['service_type'] = 'HOME_DELIVERY';
+        // }
         $requestedShipment = [
             'shipper' => $shipper,
             'recipients' => [$recipient],
             'pickupType' => 'USE_SCHEDULED_PICKUP',
-            'serviceType' => $this->mapServiceType($data['service_type'], $recipient),
-            'packagingType' => 'YOUR_PACKAGING',
+            'serviceType' => $data['service_type'],
+            'packagingType' => $data['packaging_type']??'YOUR_PACKAGING',
             'totalPackageCount' => count($packages),
             'requestedPackageLineItems' => $packages,
             'labelSpecification' => $this->getLabelSpecification(),
@@ -43,10 +45,21 @@ class ShipmentPayloads
         // 額外資訊 (notes, reference, signature, notify, 海關文件...) 
         $requestedShipment = $this->applyExtraOptions($requestedShipment, $data, $recipient);
 
+        if ($data['service_type'] == 'FEDEX_GROUND') {
+            unset($requestedShipment['totalPackageCount']);
+            if (!isset($requestedShipment['shipDatestamp'])) {
+                $requestedShipment['shipDatestamp'] = date('Y-m-d');
+            }
+            if (!isset($requestedShipment['blockInsightVisibility'])) {
+                $requestedShipment['blockInsightVisibility'] = false;
+            }
+
+        }
+
         return [
             'requestedShipment' => $requestedShipment,
             'accountNumber' => ['value' => $data['account_number']],
-            'labelResponseOptions' => 'URL_ONLY',
+            'labelResponseOptions' => $data['labelResponseOptions'] ?? 'URL_ONLY',
         ];
     }
     private function formatAddress(array $data, $returnShipment): array
@@ -54,6 +67,8 @@ class ShipmentPayloads
         $shipper = $data['shipper'];
         $recipient = $data['recipient'] ?? $data['return_address'];
 
+        $shipper['address']['residential'] = false;
+        $recipient['address']['residential'] = false;
         if (isset($shipper['address']['isResidential'])) {
             $shipper['address']['residential'] = $shipper['address']['isResidential'];
             unset($shipper['address']['isResidential']);
@@ -63,7 +78,8 @@ class ShipmentPayloads
             unset($recipient['address']['isResidential']);
         }
 
-        if ($returnShipment) {
+        $serviceType = $this->mapServiceType($data['service_type'], $recipient);
+        if ($returnShipment || $serviceType === 'FEDEX_GROUND') {
             // 在退貨 (RETURN_SHIPMENT + PENDING/EMAIL) 場景時，API 會做更嚴格的驗證。
             unset($shipper['contact']['emailAddress']);
             unset($recipient['contact']['emailAddress']);
@@ -77,7 +93,7 @@ class ShipmentPayloads
         }
         return [$shipper, $recipient];
     }
-    private function buildPackages(array $packages, $returnShipment): array
+    private function buildPackages(string $serviceType, array $packages, $returnShipment): array
     {
         $result = [];
         if (isset($packages['weight'], $packages['length'], $packages['width'], $packages['height'])) {
@@ -100,6 +116,9 @@ class ShipmentPayloads
             if ($returnShipment) {
                 $packageData['itemDescription'] = 'Return item description';
             }
+            if ($serviceType == 'FEDEX_GROUND') {
+                unset($packageData['dimensions']);
+            }
 
             $result[] = $packageData;
         }
@@ -115,7 +134,7 @@ class ShipmentPayloads
                 $commodities[] = [
                     'description' => $item['description'] ?? '',
                     'quantity' => $item['quantity'] ?? 1,
-                    'quantityUnits' => 'PCS',
+                    'quantityUnits' => $data['UnitOfMeasurement'] ?? 'PCS',
                     'unitPrice' => [
                         'currency' => $data['currency'] ?? 'USD',
                         'amount' => $item['unitPrice'] ?? 0
@@ -136,15 +155,15 @@ class ShipmentPayloads
             // 如果没有详细商品信息，使用默认值
             $commodities[] = [
                 'description' => $data['description'] ?? 'General Merchandise',
-                'quantity' => 1,
-                'quantityUnits' => 'PCS',
+                'quantity' => $data['quantity'] ?? 0,
+                'quantityUnits' => $data['UnitOfMeasurement'] ?? 'PCS',
                 'unitPrice' => [
                     'currency' => $data['currency'] ?? 'USD',
-                    'amount' => $data['customsValue'] ?? 0
+                    'amount' => $data['unitPrice'] ?? 0
                 ],
                 'customsValue' => [
                     'currency' => $data['currency'] ?? 'USD',
-                    'amount' => $data['customsValue'] ?? 0
+                    'amount' => $data['unitPrice'] ?? 0
                 ],
                 'weight' => [
                     'units' => 'LB',
@@ -154,7 +173,6 @@ class ShipmentPayloads
                 'countryOfManufacture' => $data['countryOfManufacture'] ?? $data['shipper']['address']['countryCode'] ?? 'US'
             ];
         }
-
         return $commodities;
     }
 }

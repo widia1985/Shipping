@@ -92,6 +92,7 @@ trait Common
             'FEDEX_3_DAY_FREIGHT',
             'SMART_POST',
             'THIRD_PARTY_CONSIGNEE',
+            'GROUND_HOME_DELIVERY',
         ];
         // 如果找到匹配的国内服务类型，返回它
         if (in_array($serviceType, $domesticMapping)) {
@@ -190,7 +191,7 @@ trait Common
                 'returnAssociationDetail' => [
                     // 'shipDatestamp' => $data['return_reason'],
                     'trackingNumber' => $data['original_tracking_number'],
-                    'shipDatestamp'=> $data['ship_datestamp'],
+                    'shipDatestamp' => $data['ship_datestamp'],
                 ],
                 'returnType' => 'PENDING',
             ],
@@ -395,9 +396,15 @@ trait Common
             // $payor['address'] = $shipper['address'];
         }
 
-        return [
-            'paymentType' => $paymentType,
-            'payor' => $payor
-        ];
+        if ($data['service_type'] == 'FEDEX_GROUND') {
+            return [
+                'paymentType' => $paymentType
+            ];
+        } else {
+            return [
+                'paymentType' => $paymentType,
+                'payor' => $payor
+            ];
+        }
     }
 }

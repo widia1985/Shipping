@@ -31,5 +31,7 @@ class ShippingServiceProvider extends ServiceProvider
         );
 
         $this->loadRoutesFrom(__DIR__ . '/../routes/api.php');
+        $this->loadRoutesFrom(__DIR__ . '/../routes/shipping.php');
+        $this->loadViewsFrom(__DIR__ . '/../resources/views', 'shipping');
     }
 }
