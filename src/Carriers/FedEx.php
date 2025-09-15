@@ -7,6 +7,7 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Carbon\Carbon;
 use Widia\Shipping\Models\ShippingLabel;
+use Widia\Shipping\Models\ReturnShippingLabel;
 use Widia\Shipping\Payloads\FedEx\ShipmentPayloads;
 use Widia\Shipping\Payloads\FedEx\RatePayloads;
 use Widia\Shipping\Payloads\FedEx\CancelPayloads;
@@ -287,22 +288,32 @@ class FedEx extends AbstractCarrier
 
         return json_decode($response->getBody()->getContents(), true);
     }
-    private function saveLabelInfo(array $data, array $response): void
+    private function saveLabelInfo(array $data, array $response): array
     {
-        // 从响应中提取跟踪号码
-        $trackingNumber = $response['output']['transactionShipments'][0]['pieceResponses'][0]['trackingNumber'] ?? null;
+        $labelModel = config('shipping.database.models.shipping_label');
 
-        if (!$trackingNumber) {
-            return;
+        $transactionShipment = $response['output']['transactionShipments'][0] ?? [];
+        if (empty($transactionShipment)) {
+            return [];
         }
 
-        // 从响应中提取标签URL
-        $labelUrl = $response['output']['transactionShipments'][0]['pieceResponses'][0]['packageDocuments'][0]['url'] ?? null;
+        $completedShipmentDetail = $transactionShipment['completedShipmentDetail'] ?? [];
+        $shipmentRateDetail = $completedShipmentDetail['shipmentRating']['shipmentRateDetails'][0] ?? [];
 
-        // 从响应中提取运费
-        $shippingCost = $response['output']['transactionShipments'][0]['completedShipmentDetail']['shipmentRating']['shipmentRateDetails'][0]['totalNetCharge'] ?? null;
+        // 整票的運費
+        $shippingCost = $shipmentRateDetail['totalNetCharge'] ?? 0;
 
-        // 准备包裹信息
+        // 拆解整票費用 (shipmentfees)
+        $shipmentfees = [];
+        if (!empty($shipmentRateDetail['surcharges'])) {
+            foreach ($shipmentRateDetail['surcharges'] as $surcharge) {
+                $code = $surcharge['surchargeType'] ?? '';
+                $amount = $surcharge['amount'] ?? 0;
+                $shipmentfees[$code] = $amount;
+            }
+        }
+
+        // 準備 packageInfo
         $packageInfo = [];
         if (isset($data['packages']) && is_array($data['packages'])) {
             $packageInfo = $data['packages'];
@@ -311,34 +322,112 @@ class FedEx extends AbstractCarrier
                 'weight' => $data['weight'] ?? null,
                 'length' => $data['length'] ?? null,
                 'width' => $data['width'] ?? null,
-                'height' => $data['height'] ?? null
+                'height' => $data['height'] ?? null,
+                'box_id' => $data['box_id'] ?? null,
             ];
         }
 
-        // 创建标签记录
-        ShippingLabel::create([
+        $rs = [];
+        $completedPackageDetails = $completedShipmentDetail['completedPackageDetails'] ?? [];
+        foreach ($completedPackageDetails as $i => $packageDetail) {
+            $trackingNumber = $packageDetail['trackingIds'][0]['trackingNumber'] ?? '';
+            $labelUrl = $transactionShipment['pieceResponses'][$i]['packageDocuments'][0]['url'] ?? '';
+            $imageFormat = $transactionShipment['pieceResponses'][$i]['packageDocuments'][0]['docType'] ?? 'PDF';
+
+            // 包裹費用
+            $packagefees = [];
+            $package_ahs = 0;
+            $packageRateDetail = $packageDetail['packageRating']['packageRateDetails'][0] ?? [];
+            if (!empty($packageRateDetail['surcharges'])) {
+                foreach ($packageRateDetail['surcharges'] as $surcharge) {
+                    $code = $surcharge['surchargeType'] ?? '';
+                    $amount = $surcharge['amount'] ?? 0;
+                    $packagefees[$code] = $amount;
+
+                    if ($code === 'ADDITIONAL_HANDLING') {
+                        $package_ahs = $amount;
+                    }
+                }
+            }
+
+
+            // 如果有多個包裹，第二個以後不重複紀錄整票運費
+            $packageShippingCost = $i === 0 ? $shippingCost : 0;
+            $packageShipmentFees = $i === 0 ? $shipmentfees : [];
+
+            $markup = 1.0 + $this->markup;
+
+            $rs[] = [
             'carrier' => 'fedex',
-            'account_number' => $data['account_number'],
+                'account_name' => $this->accountName,
+                'account_number' => $data['account_number'] ?? $this->carrierAccount,
             'tracking_number' => $trackingNumber,
             'invoice_number' => $data['invoice_number'] ?? null,
-            'service_type' => $data['service_type'] ?? null,
-            'shipping_cost' => $shippingCost,
+                'market_order_id' => $data['market_order_id'] ?? null,
+                'customer_po_number' => $data['customer_po_number'] ?? null,
+                'box_id' => $packageInfo[$i]['box_id'] ?? 0,
+                'service_type' => $transactionShipment['serviceType'] ?? $data['service_type'] ?? null,
+                'shipping_cost' => $packageShippingCost * $markup,
+                'shipping_cost_base' => $packageShippingCost,
             'label_url' => $labelUrl,
-            'label_data' => $response,
+                'image_format' => $imageFormat,
+                'label_data' => $response, //$response,
             'shipper_info' => [
                 'name' => $data['shipper']['contact']['personName'] ?? null,
                 'address' => $data['shipper']['address'] ?? null,
                 'phone' => $data['shipper']['contact']['phoneNumber'] ?? null,
-                'email' => $data['shipper']['contact']['emailAddress'] ?? null
+                    'email' => $data['shipper']['contact']['emailAddress'] ?? null,
             ],
             'recipient_info' => [
                 'name' => $data['recipient']['contact']['personName'] ?? null,
                 'address' => $data['recipient']['address'] ?? null,
                 'phone' => $data['recipient']['contact']['phoneNumber'] ?? null,
-                'email' => $data['recipient']['contact']['emailAddress'] ?? null
+                    'email' => $data['recipient']['contact']['emailAddress'] ?? null,
             ],
-            'package_info' => $packageInfo,
-            'status' => 'ACTIVE'
+                'package_info' => $packageInfo[$i] ?? [],
+                'status' => 'ACTIVE',
+                'shipmentfees' => $packageShipmentFees,
+                'packagefees' => $packagefees,
+                'package_ahs' => $package_ahs,
+            ];
+
+            $labelModel::create($rs[$i]);
+        }
+
+        return $rs;
+    }
+    public function saveReturnLabel(array $data, array $response): ReturnShippingLabel
+    {
+        $transactionShipment = $response['output']['transactionShipments'][0] ?? [];
+        $piece = $transactionShipment['pieceResponses'][0] ?? [];
+
+        return ReturnShippingLabel::create([
+            'carrier' => 'fedex',
+            'account_name' => $data['account_name'] ?? null,
+            'account_number' => $data['account_number'] ?? null,
+            'tracking_number' => $piece['trackingNumber'] ?? null,
+            'original_tracking_number' => $data['original_tracking_number'] ?? null,
+            'invoice_number' => $data['invoice_number'] ?? null,
+            'market_order_id' => $data['market_order_id'] ?? null,
+            'customer_po_number' => $data['customer_po_number'] ?? null,
+            'box_id' => $data['box_id'] ?? null,
+            'service_type' => $transactionShipment['serviceType'] ?? null,
+            'service_name' => $transactionShipment['serviceName'] ?? null,
+            'ship_datestamp' => $transactionShipment['shipDatestamp'] ?? null,
+            'shipping_cost' => $piece['netChargeAmount'] ?? null,
+            'shipping_cost_base' => $piece['baseRateAmount'] ?? null,
+            'label_url' => $transactionShipment['completedShipmentDetail']['accessDetail']['accessorDetails'][0]['emailLabelUrl'] ?? null,
+            'label_data' => $response,
+            'shipper_info' => $data['shipper'] ?? null,
+            'recipient_info' => $data['recipient'] ?? null,
+            'package_info' => $data['package_info'] ?? null,
+            'shipment_advisory_details' => $transactionShipment['shipmentAdvisoryDetails'] ?? null,
+            'completed_shipment_detail' => $transactionShipment['completedShipmentDetail'] ?? null,
+            'completed_package_details' => $transactionShipment['completedShipmentDetail']['completedPackageDetails'] ?? null,
+            'shipment_rating' => $transactionShipment['completedShipmentDetail']['shipmentRating'] ?? null,
+            'surcharges' => $transactionShipment['completedShipmentDetail']['shipmentRating']['shipmentRateDetails'][0]['surcharges'] ?? null,
+            'package_ahs' => $piece['additionalHandlingSurcharge'] ?? null,
+            'status' => 'ACTIVE',
         ]);
     }
 }

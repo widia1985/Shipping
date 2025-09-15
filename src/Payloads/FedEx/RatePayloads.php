@@ -30,7 +30,7 @@ class RatePayloads
         // $recipientAddress = $this->formatAddress($formattedAddress['recipient']);
 
         // 确定最终的服务类型
-        $serviceType = $this->mapServiceType($formattedAddress['service_type']);
+        $serviceType = $this->mapServiceType($formattedAddress['service_type'], $formattedAddress['shipper']);
 
         // 处理包裹数据
         $packageLineItems = [];

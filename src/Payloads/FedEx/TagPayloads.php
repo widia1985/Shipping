@@ -55,7 +55,7 @@ class TagPayloads
             ],
             "shipDatestamp" => $data['shipDatestamp'],
             'pickupType' => 'CONTACT_FEDEX_TO_SCHEDULE',
-            'serviceType' => $this->mapServiceType($recipient['service_type']),
+            'serviceType' => $this->mapServiceType($recipient['service_type'], $recipient),
             'packagingType' => 'YOUR_PACKAGING',
             // 'labelSpecification' => $this->getLabelSpecification(),
             'shippingChargesPayment' => $this->buildPaymentDetail($data, $shipper),

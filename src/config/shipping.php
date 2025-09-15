@@ -53,6 +53,7 @@ return [
     'database' => [
         'tables' => [
             'shipping_labels' => 'shipping_labels',
+            'return_shipping_labels' => 'return_shipping_labels',
             'tokens' => 'token',
             'applications' => 'application',
         ],
