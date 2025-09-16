@@ -177,41 +177,50 @@ trait Common
         } else {
             $recipient = $data['return_address'];
         }
-        $shipment['shipmentSpecialServices'] = [
-            'specialServiceTypes' => [
-                'RETURN_SHIPMENT'
-            ],
-            'returnShipmentDetail' => [
-                'returnEmailDetail' => [
-                    'merchantPhoneNumber' => $recipient['contact']['phoneNumber'],
+        if ($data['return_type'] == 'PRINT_RETURN_LABEL') {
+            $shipment['shipmentSpecialServices'] = [
+                'specialServiceTypes' => [
+                    'RETURN_SHIPMENT'
                 ],
-                'rma' => [
-                    'reason' => $data['return_reason'] ?? 'none'
+                'returnShipmentDetail' => [
+                    'returnType' => 'PRINT_RETURN_LABEL',
                 ],
-                'returnAssociationDetail' => [
-                    // 'shipDatestamp' => $data['return_reason'],
-                    'trackingNumber' => $data['original_tracking_number'],
-                    'shipDatestamp' => $data['ship_datestamp'],
+            ];
+        } else {
+            $shipment['shipmentSpecialServices'] = [
+                'specialServiceTypes' => [
+                    'RETURN_SHIPMENT'
                 ],
-                'returnType' => 'PENDING',
-            ],
-            'pendingShipmentDetail' => [
-                'pendingShipmentType' => 'EMAIL',
-                'emailLabelDetail' => [
-                    'recipients' => [
-                        [
-                            'emailAddress' => $recipient['contact']['emailAddress'],
-                            'role' => 'SHIPMENT_COMPLETOR',
-                            //有效值：SHIPMENT_COMPLETOR，SHIPMENT_INITIATOR
-                            //SHIPMENT_COMPLETOR → 完成貨件的人（通常是實際會 列印標籤並寄出 的收件人）。
-                            //SHIPMENT_INITIATOR → 建立貨件的人（通常是 建立寄件請求 的人）。
+                'returnShipmentDetail' => [
+                    'returnEmailDetail' => [
+                        'merchantPhoneNumber' => $recipient['contact']['phoneNumber'],
+                    ],
+                    'rma' => [
+                        'reason' => $data['return_reason'] ?? 'none'
+                    ],
+                    'returnAssociationDetail' => [
+                        'trackingNumber' => $data['original_tracking_number'],
+                        'shipDatestamp' => $data['ship_datestamp'],
+                    ],
+                    'returnType' => 'PENDING',
+                ],
+                'pendingShipmentDetail' => [
+                    'pendingShipmentType' => 'EMAIL',
+                    'emailLabelDetail' => [
+                        'recipients' => [
+                            [
+                                'emailAddress' => $recipient['contact']['emailAddress'],
+                                'role' => 'SHIPMENT_COMPLETOR',
+                                //有效值：SHIPMENT_COMPLETOR，SHIPMENT_INITIATOR
+                                //SHIPMENT_COMPLETOR → 完成貨件的人（通常是實際會 列印標籤並寄出 的收件人）。
+                                //SHIPMENT_INITIATOR → 建立貨件的人（通常是 建立寄件請求 的人）。
+                            ]
                         ]
-                    ]
-                ],
-                'expirationTimeStamp' => $data['expiration_time'],
-            ]
-
-        ];
+                    ],
+                    'expirationTimeStamp' => $data['expiration_time'],
+                ]
+            ];
+        }
 
         return $shipment;
     }

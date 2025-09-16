@@ -183,6 +183,16 @@
                     </div>
                     <div class="row">
                         <div class="mb-3 col">
+                            <label class="form-label">The specifies the return Type</label>
+                            <select name="return_type" class="form-select">
+                                <option value="PENDING">PENDING</option>
+                                <option value="PRINT_RETURN_LABEL">PRINT_RETURN_LABEL</option>
+                            </select>
+
+                            <span>這會指定傳回類型。對於列印的退貨標籤貨件，需要設定為 PRINT_RETURN_LABEL。對於電子郵件退貨標籤貨件，returnType 必須設定為 PENDING，而
+                                pendingShipmentDetail 必須設定為 EMAIL。</span>
+                        </div>
+                        <div class="mb-3 col">
                             ship_datestamp
                             <input type="date" name="ship_datestamp" class="form-control" value="ship_datestamp">
                         </div>
@@ -211,6 +221,7 @@
                             <option value="FEDEX_GROUND">FEDEX GROUND</option>
                             <option value="GROUND_HOME_DELIVERY">FedEx Home Delivery</option>
                             <option value="PRIORITY_OVERNIGHT">PRIORITY_OVERNIGHT</option>
+                            <option value="STANDARD_OVERNIGHT">STANDARD_OVERNIGHT</option>
                             <option value="FEDEX 2DAY A.M.">FEDEX 2DAY A.M.</option>
                         </select>
                     </div>
@@ -218,6 +229,7 @@
                     <div class="col mb-3">
                         <label class="form-label">packaging Type</label>
                         <select name="packaging_type" class="form-select">
+                            <option value="YOUR_PACKAGING">YOUR_PACKAGING</option>
                             <option value="FEDEX_ENVELOPE">FEDEX_ENVELOPE</option>
                             <option value="FEDEX_SMALL_BOX">FEDEX_SMALL_BOX</option>
                             <option value="FEDEX_MEDIUM_BOX">FEDEX_MEDIUM_BOX</option>
@@ -225,8 +237,6 @@
                             <option value="FEDEX_EXTRA_LARGE_BOX">FEDEX_EXTRA_LARGE_BOX</option>
                             <option value="FEDEX_PAK">FEDEX_PAK</option>
                             <option value="FEDEX_TUBE">FEDEX_TUBE</option>
-                            <option value="YOUR_PACKAGING">YOUR_PACKAGING</option>
-
                         </select>
                     </div>
                 </div>
@@ -299,8 +309,7 @@
                                 <input type="number" name="items[0][quantity]" class="form-control" placeholder="Qty">
                             </div>
                             <div class="col">
-                                <input type="text" name="items[0][unitPrice]" class="form-control"
-                                    placeholder="Unit Price">
+                                <input type="text" name="items[0][unitPrice]" class="form-control" placeholder="Unit Price">
                             </div>
                             <div class="col">
                                 <input type="text" name="items[0][UnitOfMeasurement]" class="form-control"
@@ -326,13 +335,13 @@
             let newPackage = document.createElement('div');
             // newPackage.classList.add('package', 'border', 'p-3', 'mb-3');
             newPackage.innerHTML = `
-                            <div class="row mb-2">
-                                <div class="col"><input type="number" name="packages[${packageIndex}][weight]" class="form-control" placeholder="Weight"></div>
-                                <div class="col"><input type="number" name="packages[${packageIndex}][length]" class="form-control" placeholder="Length"></div>
-                                <div class="col"><input type="number" name="packages[${packageIndex}][width]" class="form-control" placeholder="Width"></div>
-                                <div class="col"><input type="number" name="packages[${packageIndex}][height]" class="form-control" placeholder="Height"></div>
-                            </div>
-                        `;
+                    <div class="row mb-2">
+                        <div class="col"><input type="number" name="packages[${packageIndex}][weight]" class="form-control" placeholder="Weight"></div>
+                        <div class="col"><input type="number" name="packages[${packageIndex}][length]" class="form-control" placeholder="Length"></div>
+                        <div class="col"><input type="number" name="packages[${packageIndex}][width]" class="form-control" placeholder="Width"></div>
+                        <div class="col"><input type="number" name="packages[${packageIndex}][height]" class="form-control" placeholder="Height"></div>
+                    </div>
+                `;
             wrapper.appendChild(newPackage);
             packageIndex++;
         });
@@ -343,13 +352,13 @@
             let itemsWrapper = document.getElementById('items-wrapper');
             let newItem = document.createElement('div');
             newItem.innerHTML = `
-                        <div class="row mb-2">
-                            <div class="col"><input type="text" name="items[${itemIndex}][description]" class="form-control" placeholder="Description"></div>
-                            <div class="col"><input type="number" name="items[${itemIndex}][quantity]" class="form-control" placeholder="Qty"></div>
-                            <div class="col"><input type="text" name="items[${itemIndex}][unitPrice]" class="form-control" placeholder="Unit Price"></div>
-                            <div class="col"><input type="text" name="items[${itemIndex}][UnitOfMeasurement]" class="form-control" placeholder="UOM"></div>
-                        </div>
-                        `;
+                <div class="row mb-2">
+                    <div class="col"><input type="text" name="items[${itemIndex}][description]" class="form-control" placeholder="Description"></div>
+                    <div class="col"><input type="number" name="items[${itemIndex}][quantity]" class="form-control" placeholder="Qty"></div>
+                    <div class="col"><input type="text" name="items[${itemIndex}][unitPrice]" class="form-control" placeholder="Unit Price"></div>
+                    <div class="col"><input type="text" name="items[${itemIndex}][UnitOfMeasurement]" class="form-control" placeholder="UOM"></div>
+                </div>
+                `;
             itemsWrapper.appendChild(newItem);
             itemIndex++;
         });
