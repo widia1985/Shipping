@@ -28,7 +28,7 @@ class ShipmentPayloads
         $requestedShipment = [
             'shipper' => $shipper,
             'recipients' => [$recipient],
-            'pickupType' => 'USE_SCHEDULED_PICKUP',
+            'pickupType' => $data['pickup_type'] ?? 'USE_SCHEDULED_PICKUP',
             'serviceType' => $data['service_type'],
             'packagingType' => $data['packaging_type']??'YOUR_PACKAGING',
             'totalPackageCount' => count($packages),
@@ -109,18 +109,19 @@ class ShipmentPayloads
         foreach ($packages as $package) {
             $packageData = [
                 'dimensions' => [
-                    'units' => 'IN',
+                    'units' => $package['dimensions_units']??'IN',
                     'length' => $package['length'],
                     'width' => $package['width'],
                     'height' => $package['height'],
                 ],
                 'weight' => [
-                    'units' => 'LB',
+                    'units' => $package['weight_units']??'LB',
                     'value' => $package['weight']
                 ]
             ];
             if ($returnShipment) {
-                $packageData['itemDescription'] = 'Return item description';
+                /*注意：郵件標籤退貨貨件和地面建立標籤需要提供商品描述。*/
+                $packageData['itemDescription'] = 'item description';
             }
             if ($serviceType == 'FEDEX_GROUND') {
                 unset($packageData['dimensions']);

@@ -52,6 +52,13 @@
                 <h6>Address</h6>
                 <div class="row">
                     <div class="mb-3 col">
+                        <select name="shipper[address][countryCode]" class="form-select">
+                            @foreach(config('fedex.CountryCodes') as $label => $value)
+                                <option value="{{ $value }}" {{ ($value == 'US') ? 'selected' : '' }}>{{ $label }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="mb-3 col">
                         <input type="text" name="shipper[address][streetLines][0]" class="form-control"
                             placeholder="streetLines" value="5300 Irwindale Ave">
                     </div>
@@ -66,10 +73,6 @@
                     <div class="mb-3 col">
                         <input type="text" name="shipper[address][postalCode]" class="form-control" placeholder="postalCode"
                             value="91706">
-                    </div>
-                    <div class="mb-3 col">
-                        <input type="text" name="shipper[address][countryCode]" class="form-control"
-                            placeholder="countryCode" value="US">
                     </div>
                 </div>
             </div>
@@ -93,6 +96,13 @@
                 <h6>Address</h6>
                 <div class="row">
                     <div class="mb-3 col">
+                        <select name="recipient[address][countryCode]" class="form-select">
+                            @foreach(config('fedex.CountryCodes') as $label => $value)
+                                <option value="{{ $value }}" {{ ($value == 'US') ? 'selected' : '' }}>{{ $label }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="mb-3 col">
                         <input type="text" name="recipient[address][streetLines][0]" class="form-control"
                             placeholder="streetLines" value="1809 Frederick St">
                     </div>
@@ -108,14 +118,8 @@
                         <input type="text" name="recipient[address][postalCode]" class="form-control"
                             placeholder="postalCode" value="76107">
                     </div>
-                    <div class="mb-3 col">
-                        <input type="text" name="recipient[address][countryCode]" class="form-control"
-                            placeholder="countryCode" value="US">
-                    </div>
                 </div>
             </div>
-
-
             <!-- Return -->
             <div id="Return">
                 <div class="package border p-3 mb-3">
@@ -137,6 +141,13 @@
                     <h6>Address</h6>
                     <div class="row">
                         <div class="mb-3 col">
+                            <select name="return_address[address][countryCode]" class="form-select">
+                                @foreach(config('fedex.CountryCodes') as $label => $value)
+                                    <option value="{{ $value }}" {{ ($value == 'US') ? 'selected' : '' }}>{{ $label }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                        <div class="mb-3 col">
                             <input type="text" name="return_address[address][streetLines][0]" class="form-control"
                                 placeholder="streetLines" value="1809 Frederick St">
                         </div>
@@ -151,10 +162,6 @@
                         <div class="mb-3 col">
                             <input type="text" name="return_address[address][postalCode]" class="form-control"
                                 placeholder="postalCode" value="76107">
-                        </div>
-                        <div class="mb-3 col">
-                            <input type="text" name="return_address[address][countryCode]" class="form-control"
-                                placeholder="countryCode" value="US">
                         </div>
                     </div>
                 </div>
@@ -218,25 +225,27 @@
                     <div class="col mb-3">
                         <label class="form-label">Service Type</label>
                         <select name="service_type" class="form-select">
-                            <option value="FEDEX_GROUND">FEDEX GROUND</option>
-                            <option value="GROUND_HOME_DELIVERY">FedEx Home Delivery</option>
-                            <option value="PRIORITY_OVERNIGHT">PRIORITY_OVERNIGHT</option>
-                            <option value="STANDARD_OVERNIGHT">STANDARD_OVERNIGHT</option>
-                            <option value="FEDEX 2DAY A.M.">FEDEX 2DAY A.M.</option>
+                            @foreach(config('fedex.ServiceTypes') as $label => $value)
+                                <option value="{{ $value }}">{{ $label }}</option>
+                            @endforeach
                         </select>
                     </div>
 
                     <div class="col mb-3">
-                        <label class="form-label">packaging Type</label>
+                        <label class="form-label">Package Types</label>
                         <select name="packaging_type" class="form-select">
-                            <option value="YOUR_PACKAGING">YOUR_PACKAGING</option>
-                            <option value="FEDEX_ENVELOPE">FEDEX_ENVELOPE</option>
-                            <option value="FEDEX_SMALL_BOX">FEDEX_SMALL_BOX</option>
-                            <option value="FEDEX_MEDIUM_BOX">FEDEX_MEDIUM_BOX</option>
-                            <option value="FEDEX_LARGE_BOX">FEDEX_LARGE_BOX</option>
-                            <option value="FEDEX_EXTRA_LARGE_BOX">FEDEX_EXTRA_LARGE_BOX</option>
-                            <option value="FEDEX_PAK">FEDEX_PAK</option>
-                            <option value="FEDEX_TUBE">FEDEX_TUBE</option>
+                            @foreach(config('fedex.PackageTypes') as $label => $value)
+                                <option value="{{ $value }}">{{ $label }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+
+                    <div class="col mb-3">
+                        <label class="form-label">Pickup Types</label>
+                        <select name="pickup_type" class="form-select">
+                            @foreach(config('fedex.PickupTypes') as $label => $value)
+                                <option value="{{ $value }}">{{ $label }}</option>
+                            @endforeach
                         </select>
                     </div>
                 </div>
@@ -273,18 +282,36 @@
                         <div id="packages-wrapper">
                             <div class="row  mb-2">
                                 <div class="col">
+                                    weight
                                     <input type="number" name="packages[0][weight]" class="form-control"
                                         placeholder="Weight" value="34">
                                 </div>
                                 <div class="col">
+                                    weight_units
+                                    <select name="packages[0][weight_units]" class="form-select">
+                                        <option value="LB">LB</option>
+                                        <option value="KG">KG</option>
+                                    </select>
+                                </div>
+                                <div class="col">
+                                    length
                                     <input type="number" name="packages[0][length]" class="form-control"
                                         placeholder="Length" value="49">
                                 </div>
                                 <div class="col">
+                                    dimensions_units
+                                    <select name="packages[0][dimensions_units]" class="form-select">
+                                        <option value="IN">IN</option>
+                                        <option value="CM">CM</option>
+                                    </select>
+                                </div>
+                                <div class="col">
+                                    width
                                     <input type="number" name="packages[0][width]" class="form-control" placeholder="Width"
                                         value="10">
                                 </div>
                                 <div class="col">
+                                    height
                                     <input type="number" name="packages[0][height]" class="form-control"
                                         placeholder="Height" value="6">
                                 </div>
@@ -302,18 +329,22 @@
                     <div id="items-wrapper">
                         <div class="row mb-2">
                             <div class="col">
-                                <input type="text" name="items[0][description]" class="form-control"
-                                    placeholder="Description">
+                                <select name="items[0][UnitOfMeasurement]" class="form-select">
+                                    @foreach(config('fedex.UnitOfMeasurement') as $label => $value)
+                                        <option value="{{ $value }}">{{ $label }}</option>
+                                    @endforeach
+                                </select>
                             </div>
                             <div class="col">
-                                <input type="number" name="items[0][quantity]" class="form-control" placeholder="Qty">
+                                <input type="number" min="0" name="items[0][quantity]" class="form-control"
+                                    placeholder="Qty">
                             </div>
                             <div class="col">
                                 <input type="text" name="items[0][unitPrice]" class="form-control" placeholder="Unit Price">
                             </div>
                             <div class="col">
-                                <input type="text" name="items[0][UnitOfMeasurement]" class="form-control"
-                                    placeholder="UOM">
+                                <input type="text" name="items[0][description]" class="form-control"
+                                    placeholder="Description">
                             </div>
                         </div>
                     </div>
@@ -335,30 +366,58 @@
             let newPackage = document.createElement('div');
             // newPackage.classList.add('package', 'border', 'p-3', 'mb-3');
             newPackage.innerHTML = `
-                    <div class="row mb-2">
-                        <div class="col"><input type="number" name="packages[${packageIndex}][weight]" class="form-control" placeholder="Weight"></div>
-                        <div class="col"><input type="number" name="packages[${packageIndex}][length]" class="form-control" placeholder="Length"></div>
-                        <div class="col"><input type="number" name="packages[${packageIndex}][width]" class="form-control" placeholder="Width"></div>
-                        <div class="col"><input type="number" name="packages[${packageIndex}][height]" class="form-control" placeholder="Height"></div>
+                <div class="row mb-2">
+                    <div class="col"><input type="number" min="0" name="packages[${packageIndex}][weight]" class="form-control" placeholder="Weight"></div>
+                    <div class="col">
+                        <select name="packages[${packageIndex}][units]" class="form-select">
+                            <option value="LB">LB</option>
+                            <option value="KG">KG</option>
+                        </select>
                     </div>
+                    <div class="col"><input type="number" min="0" name="packages[${packageIndex}][length]" class="form-control" placeholder="Length"></div>
+                    <div class="col">
+                        <select name="packages[${packageIndex}][dimensions_units]" class="form-select">
+                            <option value="IN">IN</option>
+                            <option value="CM">CM</option>
+                        </select>
+                    </div>
+                    <div class="col"><input type="number" min="0" name="packages[${packageIndex}][width]" class="form-control" placeholder="Width"></div>
+                    <div class="col"><input type="number" min="0" name="packages[${packageIndex}][height]" class="form-control" placeholder="Height"></div>
+                </div>
                 `;
             wrapper.appendChild(newPackage);
             packageIndex++;
         });
 
         let itemIndex = 1;
+        window.fedexUOM = @json(config('fedex.UnitOfMeasurement'));
         // 動態新增 item
-        document.getElementById('add-item').addEventListener('click', function (e) {
+        document.getElementById('add-item').addEventListener('click', function () {
             let itemsWrapper = document.getElementById('items-wrapper');
+
+            // 動態生成 select
+            let select = document.createElement('select');
+            select.name = `items[${itemIndex}][UnitOfMeasurement]`;
+            select.classList.add('form-select');
+
+            for (let label in window.fedexUOM) {
+                let value = window.fedexUOM[label];
+                let option = document.createElement('option');
+                option.value = value;
+                option.textContent = label;
+                select.appendChild(option);
+            }
+
             let newItem = document.createElement('div');
+            newItem.classList.add('row', 'mb-2');
             newItem.innerHTML = `
-                <div class="row mb-2">
-                    <div class="col"><input type="text" name="items[${itemIndex}][description]" class="form-control" placeholder="Description"></div>
-                    <div class="col"><input type="number" name="items[${itemIndex}][quantity]" class="form-control" placeholder="Qty"></div>
-                    <div class="col"><input type="text" name="items[${itemIndex}][unitPrice]" class="form-control" placeholder="Unit Price"></div>
-                    <div class="col"><input type="text" name="items[${itemIndex}][UnitOfMeasurement]" class="form-control" placeholder="UOM"></div>
-                </div>
-                `;
+                <div class="col"></div>
+                <div class="col"><input type="number" min="0" name="items[${itemIndex}][quantity]" class="form-control" placeholder="Qty"></div>
+                <div class="col"><input type="text" name="items[${itemIndex}][unitPrice]" class="form-control" placeholder="Unit Price"></div>
+                <div class="col"><input type="text" name="items[${itemIndex}][description]" class="form-control" placeholder="Description"></div>
+            `;
+            newItem.querySelector('.col').appendChild(select);
+
             itemsWrapper.appendChild(newItem);
             itemIndex++;
         });

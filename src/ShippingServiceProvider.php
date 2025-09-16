@@ -19,6 +19,7 @@ class ShippingServiceProvider extends ServiceProvider
         $this->publishes([
             __DIR__ . '/config/shipping.php' => config_path('shipping.php'),
             __DIR__ . '/config/serviceTypes.php' => config_path('serviceTypes.php'),
+            __DIR__ . '/config/fedex.php' => config_path('fedex.php'),
         ], 'config');
 
         $this->mergeConfigFrom(
@@ -28,6 +29,10 @@ class ShippingServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(
             __DIR__ . '/config/serviceTypes.php',
             'serviceTypes'
+        );
+        $this->mergeConfigFrom(
+            __DIR__ . '/config/fedex.php',
+            'fedex'
         );
 
         $this->loadRoutesFrom(__DIR__ . '/../routes/api.php');

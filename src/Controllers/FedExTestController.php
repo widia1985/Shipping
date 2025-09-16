@@ -155,6 +155,7 @@ class FedExTestController extends Controller
             'packages',
             'packaging_type',
             'items',
+            'pickup_type',
         ]);
 
         $label = $this->shipping->setCarrier([$request->carrier => [$request->account_name => $request->account_number]])
