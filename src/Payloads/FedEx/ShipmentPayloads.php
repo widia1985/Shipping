@@ -56,11 +56,17 @@ class ShipmentPayloads
 
         }
 
-        return [
+        $payload = [
             'requestedShipment' => $requestedShipment,
             'accountNumber' => ['value' => $data['account_number']],
             'labelResponseOptions' => $data['labelResponseOptions'] ?? 'URL_ONLY',
         ];
+
+        if($data['labelResponseOptions'] =='LABEL' ){
+            $payload['openShipmentAction'] = 'PROVIDE_DOCUMENTS_INCREMENTALLY';
+        }
+
+        return $payload;
     }
     private function formatAddress(array $data, $returnShipment): array
     {
