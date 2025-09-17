@@ -57,6 +57,7 @@ trait Common
     }
     private function mapServiceType(string $serviceType, array $recipient): string
     {
+        return $serviceType;
         if (empty($serviceType) || !is_string($serviceType)) {
             $serviceType = 'GROUND SERVICE';
         }
