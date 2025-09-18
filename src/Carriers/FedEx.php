@@ -173,6 +173,7 @@ class FedEx extends AbstractCarrier
     {
         $this->validateToken();
         $payload = $this->shipmentPayloads->build($data);
+        //print_r($payload);exit;
         $result = $this->sendApiRequest('post', '/ship/v1/shipments', $payload);
         $this->saveLabelInfo($data, $result);
         return $result;
@@ -191,6 +192,17 @@ class FedEx extends AbstractCarrier
         $this->validateToken();
         $payload = $this->cancelPayloads->build($this->carrierAccount, $trackingNumber);
         $result = $this->sendApiRequest('put', '/ship/v1/shipments/cancel', $payload);
+
+        if(isset($result['output']['cancelledShipment'])){
+            if(!$result['output']['cancelledShipment'] && isset($result['output']['message'])){
+                throw new \Exception($result['output']['message']);
+            }
+        }
+        else{
+            if(isset($result['errors'])){
+                throw new \Exception($result['errors'][0]['message']);
+            }
+        }
         return $result['output']['cancelledShipment'];
     }
     public function createTag($data): array
@@ -331,8 +343,19 @@ class FedEx extends AbstractCarrier
         $completedPackageDetails = $completedShipmentDetail['completedPackageDetails'] ?? [];
         foreach ($completedPackageDetails as $i => $packageDetail) {
             $trackingNumber = $packageDetail['trackingIds'][0]['trackingNumber'] ?? '';
-            $labelUrl = $transactionShipment['pieceResponses'][$i]['packageDocuments'][0]['url'] ?? '';
+            
+            $contentType = $labelUrl = $transactionShipment['pieceResponses'][$i]['packageDocuments'][0]['contentType'] ?? '';
+            $labelUrlFromResponse = $transactionShipment['pieceResponses'][$i]['packageDocuments'][0]['url'] ?? '';
+            if($contentType == 'LABEL'){
+                $labelUrl = $transactionShipment['pieceResponses'][$i]['packageDocuments'][0]['encodedLabel'] ?? '';
+            }
+
             $imageFormat = $transactionShipment['pieceResponses'][$i]['packageDocuments'][0]['docType'] ?? 'PDF';
+
+            if($labelUrlFromResponse!=''){
+                $labelUrl = $labelUrlFromResponse;
+                $imageFormat = 'url';
+            }
 
             // 包裹費用
             $packagefees = [];

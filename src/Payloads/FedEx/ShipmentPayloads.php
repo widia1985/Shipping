@@ -13,14 +13,27 @@ class ShipmentPayloads
     ) {
         $this->addressFormatter = $addressFormatter;
     }
+
+    protected function buildCustomerReferences($data){
+        $customerReferences[0]['customerReferenceType'] = 'INVOICE_NUMBER';
+        $customerReferences[0]['value'] = $data['invoice_number'] ?? 'N/A';
+        $customerReferences[1]['customerReferenceType'] = 'P_O_NUMBER';
+        $customerReferences[1]['value'] = $data['customer_po_number'] ?? '';
+        $customerReferences[2]['customerReferenceType'] = 'CUSTOMER_REFERENCE';
+        $customerReferences[2]['value'] = $data['market_order_id'] ?? '';
+        return $customerReferences;
+    }
+
     public function build(array $data, $returnShipment = false): array
     {
-
         [$shipper, $recipient] = $this->formatAddress($data, $returnShipment);
         $data['service_type'] = $this->mapServiceType($data['service_type'], $recipient);
 
+        $customerReferences = $this->buildCustomerReferences($data);
+
         $packages = $data['packages'] ?? $data['package'];
-        $packages = $this->buildPackages($data['service_type'], $packages, $returnShipment);
+        $packages = $this->buildPackages($data['service_type'], $packages, $returnShipment,$customerReferences);
+        
         // 如果是住宅地址，确保使用 HOME_DELIVERY 服务
         // if (!$returnShipment && $recipient['address']['residential'] && $recipient['address']['countryCode'] === 'US') {
         //     $data['service_type'] = 'HOME_DELIVERY';
@@ -55,6 +68,8 @@ class ShipmentPayloads
             }
 
         }
+
+        $data['labelResponseOptions'] = $data['labelResponseOptions'] ?? 'LABEL';
 
         $payload = [
             'requestedShipment' => $requestedShipment,
@@ -91,15 +106,15 @@ class ShipmentPayloads
             unset($recipient['contact']['emailAddress']);
             unset($shipper['address']['residential']);
             unset($recipient['address']['residential']);
-            $shipper['contact']['companyName'] = $address['contact']['companyName'] ?? 'N/A';
-            $recipient['contact']['companyName'] = $address['contact']['companyName'] ?? 'N/A';
+            $shipper['contact']['companyName'] = $shipper['contact']['companyName'] ?? 'N/A';
+            $recipient['contact']['companyName'] = $recipient['contact']['companyName'] ?? 'N/A';
             if (count($recipient['address']['streetLines']) < 2) {
                 $recipient['address']['streetLines'][] = 'N/A';
             }
         }
         return [$shipper, $recipient];
     }
-    private function buildPackages(string $serviceType, array $packages, $returnShipment): array
+    private function buildPackages(string $serviceType, array $packages, $returnShipment,$customerReferences = []): array
     {
         $result = [];
         if (isset($packages['weight'], $packages['length'], $packages['width'], $packages['height'])) {
@@ -107,6 +122,12 @@ class ShipmentPayloads
         }
 
         foreach ($packages as $package) {
+            if(isset($package['box_id'])){  
+                $customerReferences[] = [
+                    'customerReferenceType' => 'DEPARTMENT_NUMBER',
+                    'value' => $package['box_id']
+                ];
+            }
             $packageData = [
                 'dimensions' => [
                     'units' => $package['dimensions_units']??'IN',
@@ -117,14 +138,15 @@ class ShipmentPayloads
                 'weight' => [
                     'units' => $package['weight_units']??'LB',
                     'value' => $package['weight']
-                ]
+                ],
+                'customerReferences' => $customerReferences
             ];
             if ($returnShipment) {
                 /*注意：郵件標籤退貨貨件和地面建立標籤需要提供商品描述。*/
                 $packageData['itemDescription'] = 'item description';
             }
             if ($serviceType == 'FEDEX_GROUND') {
-                unset($packageData['dimensions']);
+                //unset($packageData['dimensions']);
             }
 
             $result[] = $packageData;
