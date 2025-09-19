@@ -103,10 +103,6 @@
                         </select>
                     </div>
                     <div class="mb-3 col">
-                        <input type="text" name="recipient[address][streetLines][0]" class="form-control"
-                            placeholder="streetLines" value="1809 Frederick St">
-                    </div>
-                    <div class="mb-3 col">
                         <input type="text" name="recipient[address][city]" class="form-control" placeholder="city"
                             value="Fort Worth">
                     </div>
@@ -117,6 +113,20 @@
                     <div class="mb-3 col">
                         <input type="text" name="recipient[address][postalCode]" class="form-control"
                             placeholder="postalCode" value="76107">
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="mb-3 col">
+                        <input type="text" name="recipient[address][streetLines][0]" class="form-control"
+                            placeholder="streetLines" value="7372 PARKRIDGE BLVD">
+                    </div>
+                    <div class="mb-3 col">
+                        <input type="text" name="recipient[address][streetLines][1]" class="form-control"
+                            placeholder="streetLines" value="APT 286">
+                    </div>
+                    <div class="mb-3 col">
+                        <input type="text" name="recipient[address][streetLines][2]" class="form-control"
+                            placeholder="streetLines" value="2903 sprank">
                     </div>
                 </div>
             </div>
@@ -180,25 +190,14 @@
                             <input type="text" name="return_instructions" class="form-control" value="return_instructions">
                         </div>
                         <div class="mb-3 col">
-                            <input type="text" name="rma_number" class="form-control" value="return_instructions">
+                            <input type="text" name="rma_number" class="form-control" value="rma_number">
                         </div>
                         <div class="mb-3 col">
                             <input type="text" name="return_authorization_number" class="form-control"
                                 value="return_authorization_number">
                         </div>
-
                     </div>
                     <div class="row">
-                        <div class="mb-3 col">
-                            <label class="form-label">The specifies the return Type</label>
-                            <select name="return_type" class="form-select">
-                                <option value="PENDING">PENDING</option>
-                                <option value="PRINT_RETURN_LABEL">PRINT_RETURN_LABEL</option>
-                            </select>
-
-                            <span>這會指定傳回類型。對於列印的退貨標籤貨件，需要設定為 PRINT_RETURN_LABEL。對於電子郵件退貨標籤貨件，returnType 必須設定為 PENDING，而
-                                pendingShipmentDetail 必須設定為 EMAIL。</span>
-                        </div>
                         <div class="mb-3 col">
                             ship_datestamp
                             <input type="date" name="ship_datestamp" class="form-control" value="ship_datestamp">
@@ -213,13 +212,7 @@
             <div class="border p-3 mb-3">
                 <h5>Create Shipment</h5>
                 <div class="row">
-                    <div class="col mb-3">
-                        <label class="form-label">labelResponseOptions</label>
-                        <select name="labelResponseOptions" class="form-select">
-                            <option value="URL_ONLY">URL_ONLY</option>
-                            <option value="LABEL">LABEL</option>
-                        </select>
-                    </div>
+
 
                     <!-- Service Type -->
                     <div class="col mb-3">
@@ -384,7 +377,7 @@
                     <div class="col"><input type="number" min="0" name="packages[${packageIndex}][width]" class="form-control" placeholder="Width"></div>
                     <div class="col"><input type="number" min="0" name="packages[${packageIndex}][height]" class="form-control" placeholder="Height"></div>
                 </div>
-                `;
+            `;
             wrapper.appendChild(newPackage);
             packageIndex++;
         });

@@ -17,7 +17,6 @@ trait Common
 
         return [$data['shipper'], $formattedAddress];
     }
-
     private function getLabelSpecification(): array
     {
         return [
@@ -27,8 +26,6 @@ trait Common
             */
         ];
     }
-
-
     private function isImporterDifferent(array $importer, array $recipient): bool
     {
         return $importer['contact']['personName'] !== $recipient['contact']['personName']
@@ -59,9 +56,8 @@ trait Common
     }
     private function mapServiceType(string $serviceType, array $recipient): string
     {
-        return $serviceType;
         if (empty($serviceType) || !is_string($serviceType)) {
-            $serviceType = 'GROUND SERVICE';
+            $serviceType = 'FEDEX_GROUND';
         }
         // 标准化服务类型名称
         $serviceType = $this->normalizeServiceType($serviceType);
@@ -96,6 +92,7 @@ trait Common
             'SMART_POST',
             'THIRD_PARTY_CONSIGNEE',
             'GROUND_HOME_DELIVERY',
+            'FEDEX_GROUND',
         ];
         // 如果找到匹配的国内服务类型，返回它
         if (in_array($serviceType, $domesticMapping)) {
@@ -180,6 +177,8 @@ trait Common
         } else {
             $recipient = $data['return_address'];
         }
+        // 默認列印標籤
+        $data['return_type'] = 'PRINT_RETURN_LABEL';
         if ($data['return_type'] == 'PRINT_RETURN_LABEL') {
             $shipment['shipmentSpecialServices'] = [
                 'specialServiceTypes' => [
