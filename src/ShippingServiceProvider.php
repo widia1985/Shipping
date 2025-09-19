@@ -4,6 +4,7 @@ namespace Widia\Shipping;
 
 use Illuminate\Support\ServiceProvider;
 use Widia\Shipping\Shipping;
+use Illuminate\Console\Scheduling\Schedule;
 
 class ShippingServiceProvider extends ServiceProvider
 {
@@ -12,6 +13,12 @@ class ShippingServiceProvider extends ServiceProvider
         $this->app->singleton('shipping', function ($app) {
             return new Shipping();
         });
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                \Widia\Shipping\Console\Commands\ClearExpiredLabels::class,
+            ]);
+        }
     }
 
     public function boot()
@@ -38,5 +45,16 @@ class ShippingServiceProvider extends ServiceProvider
         $this->loadRoutesFrom(__DIR__ . '/../routes/api.php');
         $this->loadRoutesFrom(__DIR__ . '/../routes/shipping.php');
         $this->loadViewsFrom(__DIR__ . '/../resources/views', 'shipping');
+
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
+            $this->defineSchedule($schedule);
+        });
+    }
+
+    protected function defineSchedule(Schedule $schedule)
+    {
+        $schedule->command('shipping:clear-labels')
+            ->dailyAt('02:00')
+            ->withoutOverlapping();
     }
 }

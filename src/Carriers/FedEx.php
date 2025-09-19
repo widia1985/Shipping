@@ -2,17 +2,16 @@
 
 namespace Widia\Shipping\Carriers;
 
-use Widia\Shipping\Address\AddressFormatter;
+use Carbon\Carbon;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
-use Carbon\Carbon;
+use Widia\Shipping\Address\AddressFormatter;
 use Widia\Shipping\Models\ShippingLabel;
-use Widia\Shipping\Models\ReturnShippingLabel;
-use Widia\Shipping\Payloads\FedEx\ShipmentPayloads;
-use Widia\Shipping\Payloads\FedEx\RatePayloads;
 use Widia\Shipping\Payloads\FedEx\CancelPayloads;
+use Widia\Shipping\Payloads\FedEx\RatePayloads;
+use Widia\Shipping\Payloads\FedEx\ShipmentPayloads;
 use Widia\Shipping\Payloads\FedEx\TagPayloads;
-
+use Widia\Shipping\Services\LabelService;
 class FedEx extends AbstractCarrier
 {
     protected $test_url = 'https://apis-sandbox.fedex.com';
@@ -333,7 +332,7 @@ class FedEx extends AbstractCarrier
                 $labelUrl = $labelUrlFromResponse;
                 $imageFormat = 'url';
             } elseif ($contentType === 'LABEL' && !empty($encodedLabel)) {
-                $labelUrl = $encodedLabel;
+                $labelUrl = LabelService::saveLabel($imageFormat, $encodedLabel, $trackingNumber);
             } else {
                 // 非預期回應
                 $labelUrl = 'missing label data';
@@ -343,7 +342,6 @@ class FedEx extends AbstractCarrier
                 $labelUrl = $labelUrlFromResponse;
                 $imageFormat = 'url';
             }
-
             // 包裹費用
             $packagefees = [];
             $package_ahs = 0;
@@ -407,40 +405,6 @@ class FedEx extends AbstractCarrier
         }
 
         return $rs;
-    }
-    public function saveReturnLabel(array $data, array $response): ReturnShippingLabel
-    {
-        $transactionShipment = $response['output']['transactionShipments'][0] ?? [];
-        $piece = $transactionShipment['pieceResponses'][0] ?? [];
-
-        return ReturnShippingLabel::create([
-            'carrier' => 'fedex',
-            'account_name' => $data['account_name'] ?? null,
-            'account_number' => $data['account_number'] ?? null,
-            'tracking_number' => $piece['trackingNumber'] ?? null,
-            'original_tracking_number' => $data['original_tracking_number'] ?? null,
-            'invoice_number' => $data['invoice_number'] ?? null,
-            'market_order_id' => $data['market_order_id'] ?? null,
-            'customer_po_number' => $data['customer_po_number'] ?? null,
-            'box_id' => $data['box_id'] ?? null,
-            'service_type' => $transactionShipment['serviceType'] ?? null,
-            'service_name' => $transactionShipment['serviceName'] ?? null,
-            'ship_datestamp' => $transactionShipment['shipDatestamp'] ?? null,
-            'shipping_cost' => $piece['netChargeAmount'] ?? null,
-            'shipping_cost_base' => $piece['baseRateAmount'] ?? null,
-            'label_url' => $transactionShipment['completedShipmentDetail']['accessDetail']['accessorDetails'][0]['emailLabelUrl'] ?? null,
-            'label_data' => $response,
-            'shipper_info' => $data['shipper'] ?? null,
-            'recipient_info' => $data['recipient'] ?? null,
-            'package_info' => $data['package_info'] ?? null,
-            'shipment_advisory_details' => $transactionShipment['shipmentAdvisoryDetails'] ?? null,
-            'completed_shipment_detail' => $transactionShipment['completedShipmentDetail'] ?? null,
-            'completed_package_details' => $transactionShipment['completedShipmentDetail']['completedPackageDetails'] ?? null,
-            'shipment_rating' => $transactionShipment['completedShipmentDetail']['shipmentRating'] ?? null,
-            'surcharges' => $transactionShipment['completedShipmentDetail']['shipmentRating']['shipmentRateDetails'][0]['surcharges'] ?? null,
-            'package_ahs' => $piece['additionalHandlingSurcharge'] ?? null,
-            'status' => 'ACTIVE',
-        ]);
     }
     /**
      * Fedex: Create Tag API & Cancel Tag

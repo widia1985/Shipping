@@ -85,4 +85,9 @@ return [
             'live_url' => 'https://onlinetools.ups.com',
         ],
     ],
+
+    'label' => [
+        'directory' => 'labels',
+        'lifetime_days' => 30,
+    ]
 ]; 
