@@ -15,8 +15,12 @@ class ShippingLabel extends Model
         'account_number',
         'tracking_number',
         'invoice_number',
+        'market_order_id',
+        'customer_po_number',
+        'box_id',
         'service_type',
         'shipping_cost',
+        'shipping_cost_base',
         'label_url',
         'image_format',
         'label_data',
@@ -27,7 +31,14 @@ class ShippingLabel extends Model
         'cancelled_at',
         'cancelled_by',
         'cancellation_reason',
-        'status'
+        'status',
+        'formdata',
+        'shipmentfees',
+        'packagefees',
+        'package_ahs',
+        'rma_number',
+        'is_return',
+        'invoices'
     ];
 
     protected $casts = [
@@ -35,8 +46,12 @@ class ShippingLabel extends Model
         'recipient_info' => 'array',
         'package_info' => 'array',
         'label_data' => 'array',
+        'formdata' => 'array',
         'created_at' => 'datetime',
-        'cancelled_at' => 'datetime'
+        'cancelled_at' => 'datetime',
+        'shipmentfees' => 'array',
+        'packagefees' => 'array',
+        'invoices' => 'array'
     ];
 
     public function __construct(array $attributes = [])
@@ -57,12 +72,39 @@ class ShippingLabel extends Model
 
     public function cancel($reason = null, $cancelledBy = null)
     {
-        $this->update([
+        /*$this->update([
             'status' => 'CANCELLED',
             'cancelled_at' => now(),
             'cancelled_by' => $cancelledBy,
             'cancellation_reason' => $reason,
-        ]);
+        ]);*/
+        $this->void($reason,$cancelledBy);
+    }
+
+    public function void($reason = null, $cancelledBy = 0){
+        if($reason == null) $reason = 'Voided by user';
+        if($cancelledBy == 0 && \admin::user()){
+            $cancelledBy = \admin::user()->id;
+        }
+        
+        if ($this->isCancelled()) {
+            throw new \Exception('Label has already been cancelled.');
+        }
+
+        try{
+            $success = Shipping::cancelLabelByLabelModel($this);
+            if($success){
+                if(\admin::user()){
+                    $this->cancel($reason, $cancelledBy); // Assuming you have an admin user context
+                }
+            }
+            else {
+                throw new \Exception('Failed to cancel label with the shipping carrier.');
+            }
+        }
+        catch(\Exception $e) {
+            throw new \Exception('Failed to void shipment: ' . $e->getMessage());
+        }
     }
 
     public function isCancelled()
