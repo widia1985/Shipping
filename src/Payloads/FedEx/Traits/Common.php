@@ -280,10 +280,17 @@ trait Common
             !empty($data['shipper']['address']['countryCode']) &&
             $this->isInternationalShipment($data['shipper']['address']['countryCode'], $recipient['address']['countryCode'])
         ) {
+            $shipment['ShipmentSpecialServicesRequested'] = [
+                'SpecialServiceTypes' => ['ELECTRONIC_TRADE_DOCUMENTS'],
+                'ETDDetail' => [
+                    'RequestedDocumentCopies' => ['COMMERCIAL_INVOICE']
+                ]
+            ];
             $shipment['customsClearanceDetail'] = [
                 'dutiesPayment' => [
                     'paymentType' => 'RECIPIENT' // 默认收货方支付清关税
                 ],
+                'DocumentContent' => 'NON_DOCUMENTS', // NON_DOCUMENTS / DOCUMENTS_ONLY / DOCUMENTS_AND_NON_DOCUMENTS 
                 'commodities' => $this->prepareCommodities($data),
             ];
 
@@ -317,35 +324,41 @@ trait Common
                 }
             }
 
+            $emailRecipients = [];
+            if (isset($data['shipper']['contact']['emailAddress'])) {
+                $emailRecipients[] = [
+                    'emailAddress' => $data['shipper']['contact']['emailAddress'],
+                    'recipientType' => 'SHIPPER'
+                ];
+            }
+            if (isset($data['recipient']['contact']['emailAddress'])) {
+                $emailRecipients[] = [
+                    'emailAddress' => $data['recipient']['contact']['emailAddress'],
+                    'recipientType' => 'RECIPIENT'
+                ];
+            }
+            $dispositions = [
+                [
+                    'dispositionType' => 'RETURNED', // 添加打印选项
+                ]
+            ];
+            if (!empty($emailRecipients)) {
+                $dispositions[] = [
+                    'dispositionType' => 'EMAILED',
+                    'eMailDetail' => [
+                        'eMailRecipients' => $emailRecipients
+                    ]
+                ];
+            }
+
             // 添加商业发票和形式发票文档
             $shipment['shippingDocumentSpecification'] = [
-                'shippingDocumentTypes' => ['COMMERCIAL_INVOICE', 'PRO_FORMA_INVOICE'],
+                'shippingDocumentTypes' => ['COMMERCIAL_INVOICE'],
                 'commercialInvoiceDetail' => [
                     'documentFormat' => [
-                        'dispositions' => [
-                            [
-                                'dispositionType' => 'EMAILED',
-                                'emailDetail' => [
-                                    'emailRecipients' => [
-                                        [
-                                            'emailAddress' => $data['shipper']['contact']['emailAddress'] ?? '',
-                                            'emailAddressType' => 'SHIPPER'
-                                        ]
-                                    ]
-                                ]
-                            ],
-                            [
-                                'dispositionType' => 'PRINTED', // 添加打印选项
-                                'emailDetail' => [
-                                    'emailRecipients' => [
-                                        [
-                                            'emailAddress' => $data['shipper']['contact']['emailAddress'] ?? '',
-                                            'emailAddressType' => 'SHIPPER'
-                                        ]
-                                    ]
-                                ]
-                            ]
-                        ]
+                        'stockType' => 'PAPER_LETTER',
+                        'dispositions' => $dispositions,
+                        'docType' => 'PDF'
                     ]
                 ]
             ];
@@ -381,7 +394,6 @@ trait Common
                 ];
             }
         }
-
         return $shipment;
     }
     private function buildPaymentDetail(array $data, array $shipper, string $defaultType = 'SENDER'): array
