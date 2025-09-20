@@ -320,6 +320,20 @@ class FedEx extends AbstractCarrier
 
         $rs = [];
         $completedPackageDetails = $completedShipmentDetail['completedPackageDetails'] ?? [];
+
+        if(isset($transactionShipment['completedShipmentDetail']['shipmentDocuments'])){
+            foreach($transactionShipment['completedShipmentDetail']['shipmentDocuments'] as $doc){
+                if($doc['type'] == 'COMMERCIAL_INVOICE'){
+                    if(isset($doc['parts'])){
+                        $parts = $doc['parts'];
+                        foreach($parts as $part){
+                            $invoices[] = LabelService::saveInvoice($part['image']) ?? '';
+                        }
+                    }
+                }
+            }
+        }
+        
         foreach ($completedPackageDetails as $i => $packageDetail) {
             $trackingNumber = $packageDetail['trackingIds'][0]['trackingNumber'] ?? '';
 
@@ -399,6 +413,7 @@ class FedEx extends AbstractCarrier
                 'package_ahs' => $package_ahs,
                 'is_return' => $data['is_return'] ?? '0',
                 'rma_number' => $data['rma_number'] ?? '',
+                'invoices' => $invoices ?? []
             ];
 
             $labelModel::create($rs[$i]);
