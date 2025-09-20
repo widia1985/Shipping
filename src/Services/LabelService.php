@@ -26,4 +26,18 @@ class LabelService
 
         return asset(Storage::url($fileName));
     }
+
+    public static function saveInvoice(string $encodeInvoice): string
+    {
+        $datePath = date('Y/m/d');
+        $fileName = config('shipping.invoice.directory', 'invoices').'/' . $datePath . '/' . uniqid('invoice_') . '.' . $extension;
+        $directory = dirname($fileName);
+        
+        if (!is_dir($directory)) {
+            mkdir($directory, 0777, true);
+        }
+        Storage::disk('public')->put($fileName, base64_decode($encodeInvoice));
+
+        return asset(Storage::url($fileName));
+    }
 }
