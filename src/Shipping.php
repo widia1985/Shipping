@@ -13,12 +13,13 @@ class Shipping
 {
     /** @var CarrierInterface|null */
     protected $carrier = null;
-    
+
     /** @var array */
     protected $carriers = [
         'fedex' => FedEx::class,
         'ups' => UPS::class
     ];
+    protected $carrierName = null;
 
     /**
      * @param string $carrier
@@ -27,12 +28,14 @@ class Shipping
      */
     public function setCarrier(array $carrierconfig): self
     {
+
         if (!is_array($carrierconfig)) {
             throw new CarrierNotFoundException("Carrier '{$carrier}' not found");
         }
 
-        foreach($carrierconfig as $carrierName => $carrierInfo) {
+        foreach ($carrierconfig as $carrierName => $carrierInfo) {
             $carrierClassName = $this->carriers[strtolower($carrierName)] ?? null;
+            $this->carrierName = $carrierName;
             if (!class_exists($carrierClassName)) {
                 throw new CarrierNotFoundException("Carrier class '{$carrierClassName}' does not exist");
             }
@@ -41,13 +44,12 @@ class Shipping
             }*/
 
             $this->carrier = new $carrierClassName();
-            if(is_array($carrierInfo)){
-                foreach($carrierInfo as $key => $value) {
+            if (is_array($carrierInfo)) {
+                foreach ($carrierInfo as $key => $value) {
                     $carrierAccountName = $key;
                     $carrierAccountNumber = $value;
                 }
-            }
-            else{
+            } else {
                 $carrierAccountName = $carrierInfo;
                 $carrierAccountNumber = null;
             }
@@ -59,10 +61,9 @@ class Shipping
             if ($carrierAccountNumber && method_exists($this->carrier, 'setCarrierAccount')) {
                 $this->carrier->setCarrierAccount($carrierAccountNumber);
             }
-
-            $account = config('shipping.'.$carrierAccountName.'.account_number') ?? null;
-            $markup = config('shipping.'.$carrierAccountName.'.markup') ?? null;
-            if($markup != null && method_exists($this->carrier, 'setMarkup')){
+            $account = config('shipping.' . $carrierAccountName . '.account_number') ?? null;
+            $markup = config('shipping.' . $carrierAccountName . '.markup') ?? null;
+            if ($markup != null && method_exists($this->carrier, 'setMarkup')) {
                 $this->carrier->setMarkup($markup);
             }
         }
@@ -122,7 +123,7 @@ class Shipping
      * @return bool
      * @throws InvalidCarrierException
      */
-    public function cancelLabel(string $trackingNumber,$cancelReason =''): bool
+    public function cancelLabel(string $trackingNumber, $cancelReason = ''): bool
     {
         if (!$trackingNumber) {
             throw new InvalidCarrierException('Tracking number is required');
@@ -134,8 +135,8 @@ class Shipping
             return true; // Already cancelled
         }
 
-        if(!$this->carrier && $label){
-            self::setCarrier([$label->carrier=>[$label->account_name=>$label->account_number]]);
+        if (!$this->carrier && $label) {
+            self::setCarrier([$label->carrier => [$label->account_name => $label->account_number]]);
         }
 
         if (!$this->carrier) {
@@ -144,7 +145,7 @@ class Shipping
 
         $result = $this->carrier->cancelLabel($trackingNumber);
 
-        if($result){
+        if ($result) {
             // Update label status to cancelled
             if ($label) {
                 $label->cancel($cancelReason, '');
@@ -154,7 +155,7 @@ class Shipping
         return $result;
     }
 
-    public function cancelLabelByLabelModel($labelModel,$cancelReason =''): bool
+    public function cancelLabelByLabelModel($labelModel, $cancelReason = ''): bool
     {
         if (!$labelModel || !$labelModel->tracking_number) {
             throw new InvalidCarrierException('Label Model is required');
@@ -167,8 +168,8 @@ class Shipping
             return true; // Already cancelled
         }
 
-        if(!$this->carrier && $label){
-            self::setCarrier([$label->carrier=>[$label->account_name=>$label->account_number]]);
+        if (!$this->carrier && $label) {
+            self::setCarrier([$label->carrier => [$label->account_name => $label->account_number]]);
         }
 
         if (!$this->carrier) {
@@ -177,7 +178,7 @@ class Shipping
 
         $result = $this->carrier->cancelLabel($trackingNumber);
 
-        if($result){
+        if ($result) {
             // Update label status to cancelled
             if ($label) {
                 $label->cancel($cancelReason, '');
@@ -238,4 +239,28 @@ class Shipping
 
         return $this->carrier->validateAddresstoResponse($data);
     }
-} 
+    public function createReturnLabel(array $data)
+    {
+        if (!$this->carrier) {
+            throw new InvalidCarrierException('No carrier selected');
+        }
+
+        return $this->carrier->createReturnLabel($data);
+    }
+    public function createTag(array $data)
+    {
+        if (empty($this->carrierName) && $this->carrierName != 'fedex') {
+            throw new CarrierNotFoundException('This carrier is not available for this method');
+        }
+        return $this->carrier->createTag($data);
+    }
+    public function cancelTag(array $data)
+    {
+        if (empty($this->carrierName) && $this->carrierName != 'fedex') {
+            throw new CarrierNotFoundException('This carrier is not available for this method');
+        }
+        return $this->carrier->cancelTag($data);
+    }
+
+
+}

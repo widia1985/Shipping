@@ -53,6 +53,7 @@ return [
     'database' => [
         'tables' => [
             'shipping_labels' => 'shipping_labels',
+            'return_shipping_labels' => 'return_shipping_labels',
             'tokens' => 'token',
             'applications' => 'application',
         ],
@@ -84,4 +85,9 @@ return [
             'live_url' => 'https://onlinetools.ups.com',
         ],
     ],
+
+    'label' => [
+        'directory' => 'labels',
+        'lifetime_days' => 30,
+    ]
 ]; 
