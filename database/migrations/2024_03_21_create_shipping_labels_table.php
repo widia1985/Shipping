@@ -4,8 +4,7 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
+return new class extends Migration {
     public function up()
     {
         Schema::create('shipping_labels', function (Blueprint $table) {
@@ -33,12 +32,12 @@ return new class extends Migration
             $table->integer('box_id')->default(0);
             $table->text('shipmentfees')->nullable();
             $table->text('packagefees')->nullable();
-            $table->money('package_ahs')->default(0);
-            $table->money('shipping_cost_base')->default(0);
+            $table->decimal('package_ahs', 8, 3)->default(0);
+            $table->decimal('shipping_cost_base', 8, 3)->default(0);
             $table->tinyInteger('is_return')->default(0);
             $table->string('rma_number', 50)->default('');
             $table->text('invoices')->nullable();
-            
+
             $table->timestamps();
 
             $table->index(['carrier', 'account_number']);
@@ -51,4 +50,4 @@ return new class extends Migration
     {
         Schema::dropIfExists('shipping_labels');
     }
-}; 
+};
